@@ -243,6 +243,36 @@ function generatePDF(q, iss) {
   });
 }
 
+function getViewportFlags() {
+  if (typeof window === "undefined") {
+    return { isPortrait: false, isNarrow: false, isCompact: false };
+  }
+
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const isPortrait = height >= width;
+
+  return {
+    isPortrait,
+    isNarrow: width <= 1080,
+    isCompact: width <= 760 || (isPortrait && width <= 980),
+  };
+}
+
+function useResponsiveLayout() {
+  const [layout, setLayout] = useState(getViewportFlags);
+
+  useEffect(() => {
+    const updateLayout = () => setLayout(getViewportFlags());
+    updateLayout();
+    window.addEventListener("resize", updateLayout);
+
+    return () => window.removeEventListener("resize", updateLayout);
+  }, []);
+
+  return layout;
+}
+
 /* ═══════════════════════════════════════════════════════════════════ */
 /*  APP                                                               */
 /* ═══════════════════════════════════════════════════════════════════ */
@@ -256,6 +286,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const responsive = useResponsiveLayout();
 
   useEffect(() => {
     async function init() {
@@ -423,31 +454,32 @@ export default function App() {
         </div>
       )}
 
-      {view === "list" && <ListView quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} />}
-      {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => setView("list")} onPreview={q => { setCur(q); setView("preview") }} totals={totals} clients={clients} issuer={issuer} />}
-      {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => setView("list")} totals={totals} issuer={issuer} onExport={(q, iss) => generatePDF(q, iss)} />}
-      {view === "settings" && <SettingsView issuer={issuer} clients={clients} onSave={saveIssuerData} onDelClient={delClient} onBack={() => setView("list")} />}
-      {view === "clients" && <ClientsView clients={clients} onSave={saveClientData} onDelete={delClient} onBack={() => setView("list")} />}
+      {view === "list" && <ListView quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} responsive={responsive} />}
+      {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => setView("list")} onPreview={q => { setCur(q); setView("preview") }} totals={totals} clients={clients} issuer={issuer} responsive={responsive} />}
+      {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => setView("list")} totals={totals} issuer={issuer} onExport={(q, iss) => generatePDF(q, iss)} responsive={responsive} />}
+      {view === "settings" && <SettingsView issuer={issuer} clients={clients} onSave={saveIssuerData} onDelClient={delClient} onBack={() => setView("list")} responsive={responsive} />}
+      {view === "clients" && <ClientsView clients={clients} onSave={saveClientData} onDelete={delClient} onBack={() => setView("list")} responsive={responsive} />}
     </div>
   );
 }
 
 /* ─── LIST ─────────────────────────────────────────────────────────── */
-function ListView({ quotes, onNew, onEdit, onPreview, onDelete, onDup, onSettings, onClients, totals }) {
+function ListView({ quotes, onNew, onEdit, onPreview, onDelete, onDup, onSettings, onClients, totals, responsive }) {
   const [flt, setFlt] = useState("all");
   const [srch, setSrch] = useState("");
+  const { isCompact } = responsive;
   const rows = quotes.filter(q => (flt === "all" || q.status === flt) && (q.client?.name?.toLowerCase().includes(srch.toLowerCase()) || String(q.number).includes(srch)));
   return (
-    <div style={{ maxWidth: 940, margin: "0 auto", padding: "36px 20px" }} className="fd">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 28 }}>
+    <div style={{ maxWidth: 940, margin: "0 auto", padding: isCompact ? "24px 14px 90px" : "36px 20px" }} className="fd">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: isCompact ? "stretch" : "flex-end", flexDirection: isCompact ? "column" : "row", gap: isCompact ? 16 : 0, marginBottom: 28 }}>
         <div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, color: C.black, letterSpacing: "-0.5px" }}>Cotizaciones</h1>
+          <h1 style={{ fontSize: isCompact ? 22 : 26, fontWeight: 700, color: C.black, letterSpacing: "-0.5px" }}>Cotizaciones</h1>
           <p style={{ color: C.gray, fontSize: 13, marginTop: 3 }}>{quotes.length} documento{quotes.length !== 1 ? "s" : ""}</p>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Btn g onClick={onSettings}>⚙ Ajustes</Btn>
-          <Btn g onClick={onClients}>👥 Clientes</Btn>
-          <Btn s onClick={onNew}>+ Nueva cotización</Btn>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", width: isCompact ? "100%" : "auto" }}>
+          <Btn g onClick={onSettings} style={{ flex: isCompact ? "1 1 140px" : "0 0 auto" }}>⚙ Ajustes</Btn>
+          <Btn g onClick={onClients} style={{ flex: isCompact ? "1 1 140px" : "0 0 auto" }}>👥 Clientes</Btn>
+          <Btn s onClick={onNew} style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}>+ Nueva cotización</Btn>
         </div>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -456,13 +488,55 @@ function ListView({ quotes, onNew, onEdit, onPreview, onDelete, onDup, onSetting
             {s === "all" ? "TODAS" : SL[s].toUpperCase()}
           </button>
         ))}
-        <input value={srch} onChange={e => setSrch(e.target.value)} placeholder="Buscar…" style={{ marginLeft: "auto", padding: "5px 13px", borderRadius: 20, border: "1.5px solid #ccc", fontSize: 13, width: 180, background: "#fff" }} />
+        <input value={srch} onChange={e => setSrch(e.target.value)} placeholder="Buscar…" style={{ marginLeft: isCompact ? 0 : "auto", padding: "5px 13px", borderRadius: 20, border: "1.5px solid #ccc", fontSize: 13, width: isCompact ? "100%" : 180, background: "#fff" }} />
       </div>
       {rows.length === 0 ? (
         <div style={{ textAlign: "center", padding: "70px 0", color: C.gray }}>
           <div style={{ fontSize: 44, marginBottom: 12 }}>📄</div>
           <p style={{ fontSize: 15, fontWeight: 500 }}>No hay cotizaciones aún.</p>
           <button onClick={onNew} style={{ marginTop: 18, padding: "9px 22px", background: "#000", color: "#fff", border: "none", borderRadius: 5, fontSize: 13, fontWeight: 600 }}>Crear la primera</button>
+        </div>
+      ) : isCompact ? (
+        <div style={{ display: "grid", gap: 12 }}>
+          {rows.map(q => {
+            const total = q.summary?.total ?? totals(q.items).total;
+            const sc = SC[q.status];
+            const exp = q.status === "sent" && q.validUntil < today();
+            return (
+              <div key={q.id} style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 14, padding: 14, boxShadow: "0 2px 12px rgba(0,0,0,.06)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: C.gray, fontWeight: 700, letterSpacing: ".6px" }}>#{pad(q.number)}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: C.black, marginTop: 4 }}>{q.client?.name || "Sin cliente"}</div>
+                    {q.client?.contact && <div style={{ fontSize: 13, color: C.gray, marginTop: 2 }}>{q.client.contact}</div>}
+                  </div>
+                  <span style={{ alignSelf: "flex-start", padding: "4px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, letterSpacing: ".4px", background: sc.bg, color: sc.color, border: `1px solid ${sc.bd}` }}>{SL[q.status].toUpperCase()}</span>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 2 }}>Emisión</div>
+                    <div style={{ fontSize: 13, color: C.black }}>{fmtDate(q.issueDate)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 2 }}>Válida hasta</div>
+                    <div style={{ fontSize: 13, color: exp ? "#dc2626" : C.black, fontWeight: exp ? 600 : 500 }}>{fmtDate(q.validUntil)}{exp ? " ⚠" : ""}</div>
+                  </div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div style={{ fontSize: 10, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 2 }}>Total</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: C.black }}>{fmtNum(total, q.currency)}</div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  <Btn g onClick={() => onEdit(q)} style={{ flex: "1 1 120px" }}>Editar</Btn>
+                  <Btn g onClick={() => onPreview(q)} style={{ flex: "1 1 120px" }}>Previsualizar</Btn>
+                  <Btn g onClick={() => onDup(q)} style={{ flex: "1 1 120px" }}>Duplicar</Btn>
+                  <button onClick={() => { if (confirm("¿Eliminar?")) onDelete(q.id) }} style={{ flex: "1 1 120px", padding: "8px 18px", borderRadius: 5, fontSize: 13, fontWeight: 600, border: "1.5px solid #dc2626", background: "#fff", color: "#dc2626", fontFamily: F }}>Eliminar</button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div style={{ background: "#fff", borderRadius: 4, border: "1px solid #ddd", overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.06)" }}>
@@ -514,10 +588,11 @@ function ListView({ quotes, onNew, onEdit, onPreview, onDelete, onDup, onSetting
 }
 
 /* ─── EDITOR ────────────────────────────────────────────────────────── */
-function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients, issuer }) {
+function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients, issuer, responsive }) {
   const [q, setQ] = useState(init);
   const [cs, setCs] = useState(init.client?.name || "");
   const [dd, setDd] = useState(false);
+  const { isCompact, isNarrow } = responsive;
 
   const sc = (f, v) => setQ(p => ({ ...p, client: { ...p.client, [f]: v } }));
   const se = (f, v) => setQ(p => ({ ...p, equipment: { ...p.equipment, [f]: v } }));
@@ -540,22 +615,25 @@ function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients,
     onSave(q);
   };
 
+  const topGridColumns = isCompact ? "1fr" : isNarrow ? "1fr 1fr" : "1fr 1fr 1fr";
+  const issuerGridColumns = isCompact ? "1fr" : isNarrow ? "1fr 1fr" : "1fr 1fr 1fr";
+
   return (
-    <div style={{ maxWidth: 940, margin: "0 auto", padding: "32px 20px" }} className="fd">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+    <div style={{ maxWidth: 940, margin: "0 auto", padding: isCompact ? "24px 14px 90px" : "32px 20px" }} className="fd">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: isCompact ? "stretch" : "center", flexDirection: isCompact ? "column" : "row", gap: isCompact ? 14 : 0, marginBottom: 22 }}>
         <div>
           <button onClick={onCancel} style={{ background: "none", border: "none", color: C.gray, fontSize: 13, padding: 0, fontWeight: 500 }}>← Volver</button>
-          <h2 style={{ fontSize: 22, fontWeight: 700, color: C.black, marginTop: 4 }}>
+          <h2 style={{ fontSize: isCompact ? 20 : 22, fontWeight: 700, color: C.black, marginTop: 4 }}>
             {q.number != null ? `Cotización #${pad(q.number)}` : "Nueva cotización"}
           </h2>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Btn g onClick={() => onPreview(q)}>👁 Previsualizar</Btn>
-          <Btn s onClick={go}>Guardar</Btn>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", width: isCompact ? "100%" : "auto" }}>
+          <Btn g onClick={() => onPreview(q)} style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}>👁 Previsualizar</Btn>
+          <Btn s onClick={go} style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}>Guardar</Btn>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: topGridColumns, gap: 16, marginBottom: 16 }}>
         <Sec t="Estado y fechas">
           <F2 l="Estado"><select value={q.status} onChange={e => setQ(p => ({ ...p, status: e.target.value }))} style={IS}>{Object.entries(SL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></F2>
           <F2 l="Fecha de emisión"><input type="date" value={q.issueDate} onChange={e => setQ(p => ({ ...p, issueDate: e.target.value }))} style={IS} /></F2>
@@ -606,7 +684,7 @@ function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients,
       </div>
 
       <Sec t="Datos del emisor" style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #f0f0f0" }}>
+        <div style={{ display: "flex", alignItems: isCompact ? "flex-start" : "center", flexDirection: isCompact ? "column" : "row", gap: 16, marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #f0f0f0" }}>
           <div style={{ width: 60, height: 60, borderRadius: "50%", background: "#000", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {iss.logoDataUrl ? <img src={iss.logoDataUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontSize: 18, fontWeight: 700, letterSpacing: "-1px" }}>{(iss.name || "").split(" ").map(w => w[0]).join("").slice(0, 2) || "N!"}</span>}
           </div>
@@ -619,7 +697,7 @@ function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients,
             {iss.logoDataUrl && <button onClick={() => si("logoDataUrl", null)} style={{ marginLeft: 8, background: "none", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 600 }}>Quitar</button>}
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: issuerGridColumns, gap: 12 }}>
           {[["name", "Nombre completo"], ["title", "Título / Profesión"], ["email", "Email"], ["phone", "Teléfono"], ["website", "Sitio web"], ["bank", "Banco"], ["accountName", "Nombre de cuenta"], ["accountNumber", "N° de cuenta"], ["accountType", "Tipo de cuenta"]].map(([k, lbl]) => (
             <F2 key={k} l={lbl}><input value={q.issuer?.[k] ?? issuer[k] ?? ""} onChange={e => si(k, e.target.value)} style={IS} /></F2>
           ))}
@@ -627,38 +705,67 @@ function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients,
       </Sec>
 
       <Sec t="Ítems" style={{ marginBottom: 16 }}>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: C.bgTop, borderBottom: "1.5px solid #ccc" }}>
-                {["Descripción", "Link", "Cant.", "Precio unit. (líquido)", "Envío", "Subtotal", ""].map(h => (
-                  <th key={h} style={{ padding: "9px 8px", textAlign: "left", fontSize: 10, color: C.gray, fontWeight: 700, letterSpacing: ".5px", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {q.items.map(item => {
-                const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
-                return (
-                  <tr key={item.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "7px 6px" }}><input value={item.description} onChange={e => itm(item.id, "description", e.target.value)} placeholder="Producto o servicio…" style={{ ...IS, minWidth: 170 }} /></td>
-                    <td style={{ padding: "7px 6px" }}><input value={item.link} onChange={e => itm(item.id, "link", e.target.value)} placeholder="https://…" style={{ ...IS, minWidth: 120 }} /></td>
-                    <td style={{ padding: "7px 6px" }}><input type="number" min="1" value={item.qty} onChange={e => itm(item.id, "qty", e.target.value)} style={{ ...IS, width: 58 }} /></td>
-                    <td style={{ padding: "7px 6px" }}><input type="number" min="0" value={item.unitPrice} onChange={e => itm(item.id, "unitPrice", e.target.value)} placeholder="0" style={{ ...IS, width: 120 }} /></td>
-                    <td style={{ padding: "7px 6px" }}><input type="number" min="0" value={item.shipping} onChange={e => itm(item.id, "shipping", e.target.value)} placeholder="0" style={{ ...IS, width: 95 }} /></td>
-                    <td style={{ padding: "7px 6px", fontWeight: 700, color: C.black, whiteSpace: "nowrap" }}>{fmtNum(sv, q.currency)}</td>
-                    <td style={{ padding: "7px 6px" }}>{q.items.length > 1 && <button onClick={() => rmI(item.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, lineHeight: 1 }}>×</button>}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        {isCompact ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            {q.items.map((item, index) => {
+              const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
+              return (
+                <div key={item.id} style={{ border: "1px solid #e6e6e6", borderRadius: 12, padding: 12, background: "#fafafa" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px" }}>Ítem {index + 1}</div>
+                    {q.items.length > 1 && <button onClick={() => rmI(item.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 22, lineHeight: 1 }}>×</button>}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+                    <F2 l="Descripción"><input value={item.description} onChange={e => itm(item.id, "description", e.target.value)} placeholder="Producto o servicio…" style={IS} /></F2>
+                    <F2 l="Link"><input value={item.link} onChange={e => itm(item.id, "link", e.target.value)} placeholder="https://…" style={IS} /></F2>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                      <F2 l="Cant."><input type="number" min="1" value={item.qty} onChange={e => itm(item.id, "qty", e.target.value)} style={IS} /></F2>
+                      <F2 l="Envío"><input type="number" min="0" value={item.shipping} onChange={e => itm(item.id, "shipping", e.target.value)} placeholder="0" style={IS} /></F2>
+                    </div>
+                    <F2 l="Precio unit. (líquido)"><input type="number" min="0" value={item.unitPrice} onChange={e => itm(item.id, "unitPrice", e.target.value)} placeholder="0" style={IS} /></F2>
+                  </div>
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e6e6e6", display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: C.gray, fontWeight: 600 }}>Subtotal</span>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: C.black }}>{fmtNum(sv, q.currency)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: C.bgTop, borderBottom: "1.5px solid #ccc" }}>
+                  {["Descripción", "Link", "Cant.", "Precio unit. (líquido)", "Envío", "Subtotal", ""].map(h => (
+                    <th key={h} style={{ padding: "9px 8px", textAlign: "left", fontSize: 10, color: C.gray, fontWeight: 700, letterSpacing: ".5px", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {q.items.map(item => {
+                  const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
+                  return (
+                    <tr key={item.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      <td style={{ padding: "7px 6px" }}><input value={item.description} onChange={e => itm(item.id, "description", e.target.value)} placeholder="Producto o servicio…" style={{ ...IS, minWidth: 170 }} /></td>
+                      <td style={{ padding: "7px 6px" }}><input value={item.link} onChange={e => itm(item.id, "link", e.target.value)} placeholder="https://…" style={{ ...IS, minWidth: 120 }} /></td>
+                      <td style={{ padding: "7px 6px" }}><input type="number" min="1" value={item.qty} onChange={e => itm(item.id, "qty", e.target.value)} style={{ ...IS, width: 58 }} /></td>
+                      <td style={{ padding: "7px 6px" }}><input type="number" min="0" value={item.unitPrice} onChange={e => itm(item.id, "unitPrice", e.target.value)} placeholder="0" style={{ ...IS, width: 120 }} /></td>
+                      <td style={{ padding: "7px 6px" }}><input type="number" min="0" value={item.shipping} onChange={e => itm(item.id, "shipping", e.target.value)} placeholder="0" style={{ ...IS, width: 95 }} /></td>
+                      <td style={{ padding: "7px 6px", fontWeight: 700, color: C.black, whiteSpace: "nowrap" }}>{fmtNum(sv, q.currency)}</td>
+                      <td style={{ padding: "7px 6px" }}>{q.items.length > 1 && <button onClick={() => rmI(item.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, lineHeight: 1 }}>×</button>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
         <button onClick={addI} style={{ marginTop: 10, width: "100%", background: "none", border: "1.5px dashed #ccc", color: C.gray, padding: "7px", borderRadius: 5, fontSize: 13, fontWeight: 500, transition: "all .12s" }} onMouseEnter={e => { e.currentTarget.style.borderColor = "#000"; e.currentTarget.style.color = "#000" }} onMouseLeave={e => { e.currentTarget.style.borderColor = "#ccc"; e.currentTarget.style.color = C.gray }}>
           + Agregar ítem
         </button>
-        <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
-          <div style={{ minWidth: 280 }}>
+        <div style={{ marginTop: 16, display: "flex", justifyContent: isCompact ? "stretch" : "flex-end" }}>
+          <div style={{ minWidth: isCompact ? "100%" : 280, width: isCompact ? "100%" : "auto" }}>
             <TR l="Subtotal" v={fmtNum(sub, q.currency)} />
             {shp > 0 && <TR l="Envío total" v={fmtNum(shp, q.currency)} />}
             <div style={{ height: 1, background: C.black, margin: "8px 0" }} />
@@ -675,7 +782,7 @@ function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients,
 }
 
 /* ─── PREVIEW ───────────────────────────────────────────────────────── */
-function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport }) {
+function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport, responsive }) {
   const iss = { ...gIss, ...q.issuer };
   const { sub, shp, total } = totals(q.items);
   const sc = SC[q.status];
@@ -684,19 +791,20 @@ function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport 
   const logo = iss.logoDataUrl;
   const quoteNumberLabel = fmtQuoteNumber(q.number);
   const initials = (iss.name || "").split(" ").map(w => w[0]).join("").slice(0, 2) || "N!";
+  const { isCompact } = responsive;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#c8c8c8", padding: "28px 16px", fontFamily: F }}>
-      <div style={{ maxWidth: 680, margin: "0 auto 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Btn g onClick={onBack}>← Editar</Btn>
-          <Btn g onClick={onList}>Lista</Btn>
+    <div style={{ minHeight: "100vh", background: "#c8c8c8", padding: isCompact ? "20px 12px 90px" : "28px 16px", fontFamily: F }}>
+      <div style={{ maxWidth: 680, margin: "0 auto 18px", display: "flex", justifyContent: "space-between", alignItems: isCompact ? "stretch" : "center", flexDirection: isCompact ? "column" : "row", gap: isCompact ? 10 : 0 }}>
+        <div style={{ display: "flex", gap: 8, width: isCompact ? "100%" : "auto", flexWrap: "wrap" }}>
+          <Btn g onClick={onBack} style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}>← Editar</Btn>
+          <Btn g onClick={onList} style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}>Lista</Btn>
         </div>
-        <Btn s onClick={() => onExport(q, iss)}>⬇ Exportar PDF</Btn>
+        <Btn s onClick={() => onExport(q, iss)} style={{ width: isCompact ? "100%" : "auto" }}>⬇ Exportar PDF</Btn>
       </div>
 
-      <div id="QUOTE_DOC" style={{ maxWidth: 680, margin: "0 auto", background: "#fff", boxShadow: "0 6px 40px rgba(0,0,0,.22)", fontFamily: F, fontSize: 10 }}>
-        <div style={{ background: C.bgTop, padding: "24px 36px 22px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+      <div id="QUOTE_DOC" style={{ maxWidth: 680, margin: "0 auto", background: "#fff", boxShadow: "0 6px 40px rgba(0,0,0,.22)", fontFamily: F, fontSize: 10, overflow: "hidden" }}>
+        <div style={{ background: C.bgTop, padding: isCompact ? "20px 18px" : "24px 36px 22px", display: "flex", justifyContent: "space-between", alignItems: isCompact ? "stretch" : "flex-start", flexDirection: isCompact ? "column" : "row", gap: 16 }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
             <div style={{ width: 52, height: 52, borderRadius: "50%", background: "#000", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
               {logo ? <img src={logo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontSize: 16, fontWeight: 700, letterSpacing: "-1px" }}>{initials}</span>}
@@ -709,7 +817,7 @@ function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport 
               {iss.email && <p style={{ fontSize: 10, color: C.black, fontWeight: 400 }}>{iss.email}</p>}
             </div>
           </div>
-          <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ textAlign: isCompact ? "left" : "right", flexShrink: 0 }}>
             <p style={{ fontSize: 11, fontWeight: 600, color: C.black }}>Cotización Nro: <strong style={{ fontWeight: 700 }}>{quoteNumberLabel}</strong></p>
             <p style={{ fontSize: 9, color: C.gray, marginTop: 6, fontWeight: 500 }}>Emisión: {fmtDate(q.issueDate)}</p>
             <p style={{ fontSize: 9, color: exp ? "#dc2626" : C.gray, fontWeight: 500 }}>Válida hasta: {fmtDate(q.validUntil)}{exp ? " ⚠" : ""}</p>
@@ -719,9 +827,9 @@ function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport 
           </div>
         </div>
 
-        <div style={{ padding: "28px 36px" }}>
+        <div style={{ padding: isCompact ? "20px 18px" : "28px 36px" }}>
           {(q.client.name || q.client.contact || q.client.rut || q.client.phone || q.client.website || q.equipment?.enabled) && (
-            <div style={{ display: "grid", gridTemplateColumns: q.equipment?.enabled ? "1fr 1fr" : "1fr", gap: 24, marginBottom: 26 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isCompact || !q.equipment?.enabled ? "1fr" : "1fr 1fr", gap: 24, marginBottom: 26 }}>
               <div>
                 {q.client.name && <p style={{ fontSize: 14, fontWeight: 700, color: C.black }}>{q.client.name}</p>}
                 {q.client.contact && <p style={{ fontSize: 10, color: C.black, marginTop: 2 }}>{q.client.contact}</p>}
@@ -730,7 +838,7 @@ function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport 
                 {q.client.website && <p style={{ fontSize: 10, color: C.black }}>{q.client.website}</p>}
               </div>
               {q.equipment?.enabled && (q.equipment.brand || q.equipment.model || q.equipment.serial || q.equipment.year || q.equipment.extra) && (
-                <div style={{ borderLeft: `1px solid #e0e0e0`, paddingLeft: 20 }}>
+                <div style={{ borderLeft: isCompact ? "none" : `1px solid #e0e0e0`, borderTop: isCompact ? `1px solid #e0e0e0` : "none", paddingLeft: isCompact ? 0 : 20, paddingTop: isCompact ? 16 : 0 }}>
                   <p style={{ fontSize: 9, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 6 }}>Detalle del equipo</p>
                   <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
                     {[["Marca", q.equipment.brand], ["Modelo", q.equipment.model], ["N° Serie", q.equipment.serial], ["Año", q.equipment.year], ["Obs.", q.equipment.extra]]
@@ -746,37 +854,57 @@ function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport 
             </div>
           )}
 
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 18 }}>
-            <thead>
-              <tr>
-                <th style={{ ...THS, width: "40%" }}>Articulo</th>
-                <th style={{ ...THS, textAlign: "center" }}>Cantidad</th>
-                <th style={{ ...THS, textAlign: "center" }}>Precio Uni.</th>
-                {hasShp && <th style={{ ...THS, textAlign: "center" }}>Envío</th>}
-                <th style={{ ...THS, textAlign: "right" }}>SUBTOTAL</th>
-              </tr>
-              <tr><td colSpan={hasShp ? 5 : 4}><div style={{ height: "0.75px", background: C.gray }} /></td></tr>
-            </thead>
-            <tbody>
+          {isCompact ? (
+            <div style={{ display: "grid", gap: 12, marginBottom: 18 }}>
               {q.items.filter(i => i.description.trim()).map((item) => {
                 const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
                 return (
-                  <tr key={item.id}>
-                    <td style={{ ...TDS, borderBottom: `0.75px solid ${C.gray}` }}>
-                      <p style={{ fontWeight: 700, color: C.black, fontSize: 10 }}>{item.description}</p>
-                      {item.link && <p style={{ marginTop: 2 }}><a href={item.link} style={{ color: "#2563eb", fontSize: 9, textDecoration: "none" }}>{item.link}</a></p>}
-                    </td>
-                    <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{item.qty} {parseFloat(item.qty) === 1 ? "Unidad" : "Unidades"}</td>
-                    <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{fmtNum(item.unitPrice, q.currency)}</td>
-                    {hasShp && <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{item.shipping ? fmtNum(item.shipping, q.currency) : "—"}</td>}
-                    <td style={{ ...TDS, textAlign: "right", borderBottom: `0.75px solid ${C.gray}` }}>{fmtNum(sv, q.currency)}</td>
-                  </tr>
+                  <div key={item.id} style={{ border: "1px solid #e6e6e6", borderRadius: 12, padding: 12 }}>
+                    <p style={{ fontWeight: 700, color: C.black, fontSize: 12 }}>{item.description}</p>
+                    {item.link && <p style={{ marginTop: 4 }}><a href={item.link} style={{ color: "#2563eb", fontSize: 10, textDecoration: "none", wordBreak: "break-all" }}>{item.link}</a></p>}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 12 }}>
+                      <div><div style={{ fontSize: 9, color: C.gray, fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Cantidad</div><div style={{ fontSize: 11, color: C.black }}>{item.qty} {parseFloat(item.qty) === 1 ? "Unidad" : "Unidades"}</div></div>
+                      <div><div style={{ fontSize: 9, color: C.gray, fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Precio Uni.</div><div style={{ fontSize: 11, color: C.black }}>{fmtNum(item.unitPrice, q.currency)}</div></div>
+                      {hasShp && <div><div style={{ fontSize: 9, color: C.gray, fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Envío</div><div style={{ fontSize: 11, color: C.black }}>{item.shipping ? fmtNum(item.shipping, q.currency) : "—"}</div></div>}
+                      <div style={{ gridColumn: hasShp ? "2 / 3" : "1 / -1" }}><div style={{ fontSize: 9, color: C.gray, fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Subtotal</div><div style={{ fontSize: 12, color: C.black, fontWeight: 700 }}>{fmtNum(sv, q.currency)}</div></div>
+                    </div>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 18 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...THS, width: "40%" }}>Articulo</th>
+                  <th style={{ ...THS, textAlign: "center" }}>Cantidad</th>
+                  <th style={{ ...THS, textAlign: "center" }}>Precio Uni.</th>
+                  {hasShp && <th style={{ ...THS, textAlign: "center" }}>Envío</th>}
+                  <th style={{ ...THS, textAlign: "right" }}>SUBTOTAL</th>
+                </tr>
+                <tr><td colSpan={hasShp ? 5 : 4}><div style={{ height: "0.75px", background: C.gray }} /></td></tr>
+              </thead>
+              <tbody>
+                {q.items.filter(i => i.description.trim()).map((item) => {
+                  const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
+                  return (
+                    <tr key={item.id}>
+                      <td style={{ ...TDS, borderBottom: `0.75px solid ${C.gray}` }}>
+                        <p style={{ fontWeight: 700, color: C.black, fontSize: 10 }}>{item.description}</p>
+                        {item.link && <p style={{ marginTop: 2 }}><a href={item.link} style={{ color: "#2563eb", fontSize: 9, textDecoration: "none" }}>{item.link}</a></p>}
+                      </td>
+                      <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{item.qty} {parseFloat(item.qty) === 1 ? "Unidad" : "Unidades"}</td>
+                      <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{fmtNum(item.unitPrice, q.currency)}</td>
+                      {hasShp && <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{item.shipping ? fmtNum(item.shipping, q.currency) : "—"}</td>}
+                      <td style={{ ...TDS, textAlign: "right", borderBottom: `0.75px solid ${C.gray}` }}>{fmtNum(sv, q.currency)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
 
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 32 }}>
+          <div style={{ display: "flex", justifyContent: isCompact ? "stretch" : "flex-end", marginBottom: 32 }}>
             <div>
               {shp > 0 && (
                 <>
@@ -812,7 +940,7 @@ function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport 
           )}
         </div>
 
-        <div style={{ borderTop: "1px solid #ccc", padding: "12px 36px", textAlign: "center" }}>
+        <div style={{ borderTop: "1px solid #ccc", padding: isCompact ? "12px 18px" : "12px 36px", textAlign: "center" }}>
           <p style={{ fontSize: 8, color: C.gray, fontWeight: 500, lineHeight: 1.8 }}>{iss.name}{iss.title && ` · ${iss.title}`}</p>
           <p style={{ fontSize: 8, color: C.gray, lineHeight: 1.8 }}>
             {iss.email && `Correo electrónico: ${iss.email}`}
@@ -826,17 +954,18 @@ function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport 
 }
 
 /* ─── SETTINGS ──────────────────────────────────────────────────────── */
-function SettingsView({ issuer: init, clients, onSave, onDelClient, onBack }) {
+function SettingsView({ issuer: init, clients, onSave, onDelClient, onBack, responsive }) {
   const [f, setF] = useState(init);
+  const { isCompact } = responsive;
   const s = (k, v) => setF(p => ({ ...p, [k]: v }));
   const handleLogo = (e) => { const fl = e.target.files[0]; if (!fl) return; const r = new FileReader(); r.onload = (ev) => s("logoDataUrl", ev.target.result); r.readAsDataURL(fl) };
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto", padding: "36px 20px" }} className="fd">
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: isCompact ? "24px 14px 90px" : "36px 20px" }} className="fd">
       <button onClick={onBack} style={{ background: "none", border: "none", color: C.gray, fontSize: 13, marginBottom: 16, cursor: "pointer", fontWeight: 500 }}>← Volver</button>
       <h2 style={{ fontSize: 22, fontWeight: 700, color: C.black, marginBottom: 24 }}>Ajustes del emisor</h2>
 
       <Sec t="Logotipo" style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+        <div style={{ display: "flex", alignItems: isCompact ? "flex-start" : "center", flexDirection: isCompact ? "column" : "row", gap: 18 }}>
           <div style={{ width: 68, height: 68, borderRadius: "50%", background: "#000", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {f.logoDataUrl ? <img src={f.logoDataUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>{(f.name || "N").charAt(0)}</span>}
           </div>
@@ -852,7 +981,7 @@ function SettingsView({ issuer: init, clients, onSave, onDelClient, onBack }) {
       </Sec>
 
       <Sec t="Datos personales" style={{ marginBottom: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isCompact ? "1fr" : "1fr 1fr", gap: 14 }}>
           {[["name", "Nombre completo"], ["title", "Título / Profesión"], ["email", "Email"], ["phone", "Teléfono"], ["website", "Sitio web"]].map(([k, l]) => (
             <F2 key={k} l={l}><input value={f[k] || ""} onChange={e => s(k, e.target.value)} style={IS} /></F2>
           ))}
@@ -860,24 +989,24 @@ function SettingsView({ issuer: init, clients, onSave, onDelClient, onBack }) {
       </Sec>
 
       <Sec t="Información de pago" style={{ marginBottom: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isCompact ? "1fr" : "1fr 1fr", gap: 14 }}>
           {[["bank", "Banco"], ["accountName", "Nombre de cuenta"], ["accountNumber", "N° de cuenta"], ["accountType", "Tipo de cuenta"]].map(([k, l]) => (
             <F2 key={k} l={l}><input value={f[k] || ""} onChange={e => s(k, e.target.value)} style={IS} /></F2>
           ))}
         </div>
         <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
-          <Btn s onClick={() => onSave(f)}>Guardar ajustes</Btn>
+          <Btn s onClick={() => onSave(f)} style={{ width: isCompact ? "100%" : "auto" }}>Guardar ajustes</Btn>
         </div>
       </Sec>
 
       {clients.length > 0 && (
         <Sec t={`Historial de clientes (${clients.length})`}>
           {clients.map(c => (
-            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #f0f0f0" }}>
+            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: isCompact ? "flex-start" : "center", flexDirection: isCompact ? "column" : "row", gap: isCompact ? 8 : 12, padding: "10px 0", borderBottom: "1px solid #f0f0f0" }}>
               <div>
                 <strong style={{ fontSize: 14 }}>{c.name}</strong>
-                {c.contact && <span style={{ color: C.gray, fontSize: 12, marginLeft: 8 }}>{c.contact}</span>}
-                {c.rut && <span style={{ color: C.gray, fontSize: 12, marginLeft: 8 }}>RUT: {c.rut}</span>}
+                {c.contact && <div style={{ color: C.gray, fontSize: 12, marginTop: 4 }}>{c.contact}</div>}
+                {c.rut && <div style={{ color: C.gray, fontSize: 12, marginTop: 2 }}>RUT: {c.rut}</div>}
               </div>
               <button onClick={() => { if (confirm("¿Eliminar cliente?")) onDelClient(c.id) }} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 20, cursor: "pointer" }}>×</button>
             </div>
@@ -896,5 +1025,5 @@ const TDS = { padding: "10px 8px 10px 0", fontSize: 10, color: C.black, vertical
 function Sec({ t, children, style }) { return <div style={{ background: C.white, border: "1px solid #ddd", borderRadius: 4, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.05)", ...style }}>{t && <p style={{ fontSize: 11, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 14 }}>{t}</p>}{children}</div> }
 function F2({ l, children }) { return <div style={{ marginBottom: 10 }}><label style={{ display: "block", fontSize: 11, color: C.gray, fontWeight: 600, marginBottom: 4, letterSpacing: ".3px" }}>{l}</label>{children}</div> }
 function TR({ l, v, b }) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: b ? 14 : 12, fontWeight: b ? 700 : 400, color: b ? C.black : C.gray }}><span>{l}</span><span>{v}</span></div> }
-function Btn({ children, onClick, s, g }) { return <button onClick={onClick} style={{ padding: "8px 18px", borderRadius: 5, fontSize: 13, fontWeight: 600, border: `1.5px solid ${s ? "#000" : "#ccc"}`, background: s ? "#000" : "#fff", color: s ? "#fff" : "#555", fontFamily: F, transition: "opacity .12s" }} onMouseEnter={e => e.currentTarget.style.opacity = ".75"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>{children}</button> }
+function Btn({ children, onClick, s, g, style, disabled }) { return <button onClick={onClick} disabled={disabled} style={{ padding: "8px 18px", borderRadius: 5, fontSize: 13, fontWeight: 600, border: `1.5px solid ${s ? "#000" : "#ccc"}`, background: s ? "#000" : "#fff", color: s ? "#fff" : "#555", fontFamily: F, transition: "opacity .12s", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? .55 : 1, ...style }} onMouseEnter={e => { if (!disabled) e.currentTarget.style.opacity = ".75" }} onMouseLeave={e => { e.currentTarget.style.opacity = disabled ? ".55" : "1" }}>{children}</button> }
 function IB({ children, onClick, title, d }) { return <button onClick={onClick} title={title} style={{ width: 30, height: 30, borderRadius: 5, border: "1px solid #ddd", background: "#fff", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", transition: "all .12s" }} onMouseEnter={e => { e.currentTarget.style.borderColor = d ? "#dc2626" : "#000"; e.currentTarget.style.background = d ? "#fef2f2" : "#f5f5f5" }} onMouseLeave={e => { e.currentTarget.style.borderColor = "#ddd"; e.currentTarget.style.background = "#fff" }}>{children}</button> }

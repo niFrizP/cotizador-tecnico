@@ -69,10 +69,11 @@ export function TR({ l, v, b }) {
     );
 }
 
-export function Btn({ children, onClick, s }) {
+export function Btn({ children, onClick, s, style, disabled }) {
     return (
         <button
             onClick={onClick}
+            disabled={disabled}
             style={{
                 padding: "8px 18px",
                 borderRadius: 5,
@@ -83,12 +84,15 @@ export function Btn({ children, onClick, s }) {
                 color: s ? "#fff" : "#555",
                 fontFamily: F,
                 transition: "opacity .12s",
+                cursor: disabled ? "not-allowed" : "pointer",
+                opacity: disabled ? 0.55 : 1,
+                ...style,
             }}
             onMouseEnter={(e) => {
-                e.currentTarget.style.opacity = ".75";
+                if (!disabled) e.currentTarget.style.opacity = ".75";
             }}
             onMouseLeave={(e) => {
-                e.currentTarget.style.opacity = "1";
+                e.currentTarget.style.opacity = disabled ? "0.55" : "1";
             }}
         >
             {children}

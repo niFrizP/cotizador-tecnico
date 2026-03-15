@@ -4,7 +4,7 @@ import { C, IS } from "../../constants/ui";
 
 const EMPTY = { name: "", contact: "", rut: "", website: "", client_phone: "" };
 
-export default function ClientsView({ clients, onSave, onDelete, onBack }) {
+export default function ClientsView({ clients, onSave, onDelete, onBack, responsive = { isCompact: false } }) {
     const [list, setList] = useState(clients);
     const [form, setForm] = useState(EMPTY);
     const [editId, setEditId] = useState(null);   // id del cliente que se está editando
@@ -67,8 +67,10 @@ export default function ClientsView({ clients, onSave, onDelete, onBack }) {
         setDd(false);
     };
 
+    const { isCompact } = responsive;
+
     return (
-        <div style={{ maxWidth: 820, margin: "0 auto", padding: "36px 20px" }} className="fd">
+        <div style={{ maxWidth: 820, margin: "0 auto", padding: isCompact ? "24px 14px 90px" : "36px 20px" }} className="fd">
             {/* Cabecera */}
             <button
                 onClick={onBack}
@@ -76,7 +78,7 @@ export default function ClientsView({ clients, onSave, onDelete, onBack }) {
             >
                 ← Volver
             </button>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 28 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: isCompact ? "stretch" : "flex-end", flexDirection: isCompact ? "column" : "row", gap: isCompact ? 10 : 0, marginBottom: 28 }}>
                 <div>
                     <h2 style={{ fontSize: 22, fontWeight: 700, color: C.black }}>Clientes</h2>
                     <p style={{ color: C.gray, fontSize: 13, marginTop: 3 }}>
@@ -87,7 +89,7 @@ export default function ClientsView({ clients, onSave, onDelete, onBack }) {
 
             {/* Formulario crear / editar */}
             <Sec t={editId ? "Editar cliente" : "Nuevo cliente"} style={{ marginBottom: 20 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isCompact ? "1fr" : "1fr 1fr", gap: 14 }}>
                     {/* Nombre con autocompletado al crear */}
                     <F2 l="Nombre / Empresa *">
                         <div style={{ position: "relative" }}>
@@ -153,11 +155,11 @@ export default function ClientsView({ clients, onSave, onDelete, onBack }) {
                     </F2>
                 </div>
 
-                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 16 }}>
                     {editId && (
-                        <Btn onClick={cancelEdit}>Cancelar</Btn>
+                        <Btn onClick={cancelEdit} style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}>Cancelar</Btn>
                     )}
-                    <Btn s onClick={handleSave} disabled={saving || !form.name.trim()}>
+                    <Btn s onClick={handleSave} disabled={saving || !form.name.trim()} style={{ flex: isCompact ? "1 1 100%" : "0 0 auto" }}>
                         {saving ? "Guardando…" : editId ? "Actualizar cliente" : "Crear cliente"}
                     </Btn>
                 </div>
@@ -168,6 +170,70 @@ export default function ClientsView({ clients, onSave, onDelete, onBack }) {
                 <div style={{ textAlign: "center", padding: "60px 0", color: C.gray }}>
                     <div style={{ fontSize: 40, marginBottom: 10 }}>👥</div>
                     <p style={{ fontSize: 15, fontWeight: 500 }}>Sin clientes aún. Crea el primero arriba.</p>
+                </div>
+            ) : isCompact ? (
+                <div style={{ display: "grid", gap: 12 }}>
+                    {list.map((c) => (
+                        <div
+                            key={c.id}
+                            style={{
+                                background: editId === c.id ? "#fffbeb" : "#fff",
+                                border: "1px solid #ddd",
+                                borderRadius: 14,
+                                padding: 14,
+                                boxShadow: "0 2px 12px rgba(0,0,0,.06)",
+                            }}
+                        >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+                                <div>
+                                    <div style={{ fontSize: 16, fontWeight: 700, color: C.black }}>{c.name}</div>
+                                    {c.contact && <div style={{ fontSize: 13, color: C.gray, marginTop: 4 }}>{c.contact}</div>}
+                                </div>
+                                {editId === c.id && (
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", padding: "4px 8px", borderRadius: 999 }}>
+                                        Editando
+                                    </span>
+                                )}
+                            </div>
+
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginBottom: 14 }}>
+                                <div>
+                                    <div style={{ fontSize: 10, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 2 }}>RUT</div>
+                                    <div style={{ fontSize: 13, color: C.black }}>{c.rut || "—"}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: 10, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 2 }}>Teléfono</div>
+                                    <div style={{ fontSize: 13, color: C.black }}>{c.client_phone || "—"}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: 10, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 2 }}>Sitio web</div>
+                                    <div style={{ fontSize: 13, color: C.black, wordBreak: "break-word" }}>
+                                        {c.website ? <a href={c.website} target="_blank" rel="noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{c.website}</a> : "—"}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                <Btn onClick={() => startEdit(c)} style={{ flex: "1 1 120px" }}>Editar</Btn>
+                                <button
+                                    onClick={() => handleDelete(c.id)}
+                                    style={{
+                                        flex: "1 1 120px",
+                                        padding: "8px 18px",
+                                        borderRadius: 5,
+                                        fontSize: 13,
+                                        fontWeight: 600,
+                                        border: "1.5px solid #dc2626",
+                                        background: "#fff",
+                                        color: "#dc2626",
+                                        fontFamily: "inherit",
+                                    }}
+                                >
+                                    Eliminar
+                                </button>
+                            </div>
+                        </div>
+                    ))}
                 </div>
             ) : (
                 <div style={{ background: "#fff", borderRadius: 4, border: "1px solid #ddd", overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.06)" }}>
