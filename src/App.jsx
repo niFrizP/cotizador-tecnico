@@ -1,0 +1,900 @@
+import { useState, useEffect } from "react";
+import {
+  fetchQuotes, fetchQuote, fetchClients, fetchIssuer,
+  getNextNumber,
+  saveQuote as dbSave, deleteQuote as dbDelete,
+  duplicateQuote as dbDuplicate, saveIssuer as dbSaveIssuer,
+  saveClient as dbSaveClient, deleteClient,
+} from "./lib/supabase";
+import ClientsView from "./components/views/ClientsView";
+
+/* ─── Google Fonts ─────────────────────────────────────────────────── */
+const _fl = document.createElement("link");
+_fl.rel = "stylesheet";
+_fl.href = "https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap";
+document.head.appendChild(_fl);
+
+/* ─── Tokens ───────────────────────────────────────────────────────── */
+const C = { black: "#000000", gray: "#535353", bgTop: "#f5f5f5", white: "#ffffff" };
+const F = "'Barlow', sans-serif";
+
+/* ─── Helpers ──────────────────────────────────────────────────────── */
+const pad = (n) => n != null ? String(n).padStart(3, "0") : "---";
+const fmtQuoteNumber = (n) => n != null ? pad(n) : "Se asigna al guardar";
+const today = () => new Date().toISOString().split("T")[0];
+const addDays = (d, n) => { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().split("T")[0] };
+const fmtDate = (d) => { if (!d) return "—"; const [y, m, dd] = d.split("-"); return `${dd}/${m}/${y}` };
+const fmtNum = (n, cur = "CLP") => {
+  const v = Number(n || 0);
+  if (cur === "USD") return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (cur === "UF") return `UF ${v.toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `$${v.toLocaleString("es-CL")}`;
+};
+
+const SL = { draft: "Borrador", sent: "Enviada", accepted: "Aceptada", rejected: "Rechazada" };
+const SC = {
+  draft: { bg: "#f1f5f9", color: "#475569", bd: "#cbd5e1" },
+  sent: { bg: "#eff6ff", color: "#2563eb", bd: "#bfdbfe" },
+  accepted: { bg: "#f0fdf4", color: "#16a34a", bd: "#bbf7d0" },
+  rejected: { bg: "#fef2f2", color: "#dc2626", bd: "#fecaca" },
+};
+
+/* ─── Data helpers ─────────────────────────────────────────────────── */
+const mkItem = () => ({ id: crypto.randomUUID(), description: "", qty: 1, unitPrice: "", shipping: "", link: "" });
+const mkQuote = (iss) => ({
+  id: crypto.randomUUID(), number: null, status: "draft",
+  issueDate: today(), validUntil: addDays(today(), 30),
+  client: { name: "", contact: "", website: "", rut: "", phone: "" },
+  equipment: { enabled: false, brand: "", model: "", serial: "", year: "", extra: "" },
+  items: [mkItem()], notes: "", currency: "CLP",
+  issuer: { ...iss },
+});
+const DEF_ISS = { name: "", title: "", email: "", phone: "", website: "", bank: "", accountName: "", accountNumber: "", accountType: "", logoDataUrl: null };
+
+/* ─── Calcular totales ─────────────────────────────────────────────── */
+const calcTotals = (items) => {
+  const sub = items.reduce((s, i) => s + (parseFloat(i.unitPrice) || 0) * (parseFloat(i.qty) || 0), 0);
+  const shp = items.reduce((s, i) => s + (parseFloat(i.shipping) || 0), 0);
+  return { sub, shp, total: sub + shp };
+};
+
+const withQuoteSummary = (quote) => ({
+  ...quote,
+  summary: calcTotals(quote.items || []),
+});
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/*  GENERAR PDF — abre ventana limpia con HTML vectorial              */
+/* ═══════════════════════════════════════════════════════════════════ */
+function generatePDF(q, iss) {
+  return new Promise((resolve) => {
+    const { sub, shp, total } = calcTotals(q.items);
+    const sc = SC[q.status];
+    const exp = q.status === "sent" && q.validUntil < today();
+    const hasShp = q.items.some(i => parseFloat(i.shipping) > 0);
+    const logo = iss.logoDataUrl;
+    const initials = (iss.name || "").split(" ").map(w => w[0]).join("").slice(0, 2) || "N!";
+    const quoteNumberLabel = fmtQuoteNumber(q.number);
+    const fileNumber = q.number != null ? pad(q.number) : "sin_numero";
+    const filename = `Cotizacion_${fileNumber}_${(q.client?.name || "").replace(/\s+/g, "_") || "cliente"}`;
+
+    const logoHtml = logo
+      ? `<img src="${logo}" style="width:52px;height:52px;border-radius:50%;object-fit:cover;display:block"/>`
+      : `<div style="width:52px;height:52px;border-radius:50%;background:#000;display:table-cell;text-align:center;vertical-align:middle;flex-shrink:0"><span style="color:#fff;font-size:16px;font-weight:700">${initials}</span></div>`;
+
+    const equipmentRows = q.equipment?.enabled
+      ? [["Marca", q.equipment.brand], ["Modelo", q.equipment.model], ["N° Serie", q.equipment.serial], ["Año", q.equipment.year], ["Obs.", q.equipment.extra]]
+        .filter(([, v]) => v)
+        .map(([l, v]) => `<tr><td style="font-size:9pt;color:#535353;font-weight:600;padding-right:8px;padding-bottom:2px;white-space:nowrap">${l}:</td><td style="font-size:9pt;color:#000;padding-bottom:2px">${v}</td></tr>`)
+        .join("")
+      : "";
+
+    const itemRowsHtml = q.items.filter(i => i.description.trim()).map(item => {
+      const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
+      return `<tr>
+        <td style="padding:8px 0;font-size:9pt;color:#000;vertical-align:top;border-bottom:0.5pt solid #535353">
+          <strong>${item.description}</strong>
+          ${item.link ? `<br/><a href="${item.link}" style="color:#2563eb;font-size:8pt">${item.link}</a>` : ""}
+        </td>
+        <td style="padding:8px 6px;font-size:9pt;color:#000;text-align:center;vertical-align:top;border-bottom:0.5pt solid #535353">${item.qty} ${parseFloat(item.qty) === 1 ? "Unidad" : "Unidades"}</td>
+        <td style="padding:8px 6px;font-size:9pt;color:#000;text-align:center;vertical-align:top;border-bottom:0.5pt solid #535353">${fmtNum(item.unitPrice, q.currency)}</td>
+        ${hasShp ? `<td style="padding:8px 6px;font-size:9pt;color:#000;text-align:center;vertical-align:top;border-bottom:0.5pt solid #535353">${item.shipping ? fmtNum(item.shipping, q.currency) : "—"}</td>` : ""}
+        <td style="padding:8px 0;font-size:9pt;color:#000;text-align:right;vertical-align:top;border-bottom:0.5pt solid #535353">${fmtNum(sv, q.currency)}</td>
+      </tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>${filename}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Barlow',sans-serif;background:#fff;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    @page{size:A4;margin:0}
+    @media print{html,body{width:210mm}body{margin:0;padding:0}}
+    .doc{width:210mm;margin:0 auto;background:#fff}
+    .hdr{background:#f5f5f5;padding:20px 32px 18px;display:table;width:100%;table-layout:fixed}
+    .hdr-l{display:table-cell;vertical-align:top}
+    .hdr-r{display:table-cell;vertical-align:top;text-align:right;white-space:nowrap;padding-left:16px;width:180px}
+    .logo-row{display:flex;align-items:flex-start;gap:12px}
+    .body{padding:24px 32px 20px}
+    .cli-tbl{display:table;width:100%;margin-bottom:20px}
+    .cli-l{display:table-cell;vertical-align:top;width:50%}
+    .cli-r{display:table-cell;vertical-align:top;width:50%;padding-left:18px;border-left:1pt solid #e0e0e0}
+    .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:8pt;font-weight:700;letter-spacing:.5px;background:${sc.bg};color:${sc.color};border:1pt solid ${sc.bd}}
+    table.items{width:100%;border-collapse:collapse;margin-bottom:14px}
+    .ftr{border-top:0.5pt solid #ccc;padding:10px 32px;text-align:center;margin-top:6px}
+    .tot-wrap{display:table;margin-left:auto;margin-bottom:20px}
+    .tot-row{display:table-row}
+    .tot-lbl{display:table-cell;font-size:9pt;color:#535353;padding-right:24px;padding-bottom:1px}
+    .tot-val{display:table-cell;font-size:9pt;color:#535353;text-align:right;padding-bottom:1px}
+    .tot-final-lbl{display:table-cell;font-size:12pt;font-weight:700;color:#535353;padding-right:16px;padding-top:3px}
+    .tot-final-val{display:table-cell;font-size:12pt;font-weight:700;color:#535353;text-align:right;padding-top:3px}
+  </style>
+</head>
+<body>
+<div class="doc">
+  <div class="hdr">
+    <div class="hdr-l">
+      <div class="logo-row">
+        ${logoHtml}
+        <div style="line-height:1.55">
+          <div style="font-size:13pt;font-weight:600;color:#000">${iss.name || ""}</div>
+          ${iss.title ? `<div style="font-size:9pt;color:#000">${iss.title}</div>` : ""}
+          ${iss.website ? `<div style="font-size:9pt;color:#000">${iss.website}</div>` : ""}
+          ${iss.phone ? `<div style="font-size:9pt;color:#000">${iss.phone}</div>` : ""}
+          ${iss.email ? `<div style="font-size:9pt;color:#000">${iss.email}</div>` : ""}
+        </div>
+      </div>
+    </div>
+    <div class="hdr-r">
+      <div style="font-size:11pt;font-weight:600;color:#000">Cotización Nro: <strong>${quoteNumberLabel}</strong></div>
+      <div style="font-size:8pt;color:#535353;margin-top:5px">Emisión: ${fmtDate(q.issueDate)}</div>
+      <div style="font-size:8pt;color:${exp ? "#dc2626" : "#535353"}">Válida hasta: ${fmtDate(q.validUntil)}${exp ? " ⚠" : ""}</div>
+      <div style="margin-top:7px"><span class="badge">${SL[q.status].toUpperCase()}</span></div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="cli-tbl">
+      <div class="cli-l">
+        ${q.client.name ? `<div style="font-size:13pt;font-weight:700;color:#000">${q.client.name}</div>` : ""}
+        ${q.client.contact ? `<div style="font-size:9pt;color:#000;margin-top:2px">${q.client.contact}</div>` : ""}
+        ${q.client.rut ? `<div style="font-size:9pt;color:#000">RUT: ${q.client.rut}</div>` : ""}
+        ${q.client.phone ? `<div style="font-size:9pt;color:#000">Tel: ${q.client.phone}</div>` : ""}
+        ${q.client.website ? `<div style="font-size:9pt;color:#000">${q.client.website}</div>` : ""}
+      </div>
+      ${q.equipment?.enabled && equipmentRows
+        ? `<div class="cli-r">
+            <div style="font-size:8pt;font-weight:700;color:#535353;text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px">Detalle del equipo</div>
+            <table style="border-collapse:collapse"><tbody>${equipmentRows}</tbody></table>
+          </div>`
+        : `<div class="cli-r" style="border:none"></div>`}
+    </div>
+
+    <table class="items">
+      <thead>
+        <tr>
+          <th style="padding:0 0 7px 0;text-align:left;font-size:10pt;font-weight:600;color:#000;width:40%">Articulo</th>
+          <th style="padding:0 6px 7px;text-align:center;font-size:10pt;font-weight:600;color:#000">Cantidad</th>
+          <th style="padding:0 6px 7px;text-align:center;font-size:10pt;font-weight:600;color:#000">Precio Uni.</th>
+          ${hasShp ? `<th style="padding:0 6px 7px;text-align:center;font-size:10pt;font-weight:600;color:#000">Envío</th>` : ""}
+          <th style="padding:0 0 7px;text-align:right;font-size:10pt;font-weight:600;color:#000">SUBTOTAL</th>
+        </tr>
+        <tr><td colspan="${hasShp ? 5 : 4}" style="padding:0"><div style="height:0.5pt;background:#535353"></div></td></tr>
+      </thead>
+      <tbody>${itemRowsHtml}</tbody>
+    </table>
+
+    <div class="tot-wrap">
+      ${shp > 0 ? `
+      <div class="tot-row"><div class="tot-lbl">Subtotal</div><div class="tot-val">${fmtNum(sub, q.currency)}</div></div>
+      <div class="tot-row"><div class="tot-lbl">Envío</div><div class="tot-val">${fmtNum(shp, q.currency)}</div></div>` : ""}
+      <div class="tot-row"><div class="tot-final-lbl">Total:</div><div class="tot-final-val">${fmtNum(total, q.currency)}</div></div>
+    </div>
+
+    ${q.notes ? `
+    <div style="margin-bottom:18px">
+      <div style="font-size:9pt;font-weight:700;color:#535353;text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px">Notas y condiciones</div>
+      <div style="height:0.5pt;background:#535353;margin-bottom:7px"></div>
+      <div style="font-size:9pt;color:#535353;line-height:1.7;white-space:pre-line">${q.notes}</div>
+    </div>`: ""}
+
+    ${(iss.bank || iss.accountNumber) ? `
+    <div style="margin-bottom:14px">
+      <div style="font-size:9pt;font-weight:600;color:#535353;text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px">Información de pago</div>
+      <div style="font-size:8.5pt;color:#535353;line-height:1.9">
+        ${iss.bank ? `<div><span style="font-weight:500">Banco:</span> ${iss.bank}</div>` : ""}
+        ${iss.accountName ? `<div><span style="font-weight:500">Nombre:</span> ${iss.accountName}</div>` : ""}
+        ${iss.accountNumber ? `<div><span style="font-weight:500">Número de cuenta:</span> ${iss.accountNumber}</div>` : ""}
+        ${iss.accountType ? `<div><span style="font-weight:500">Tipo de cuenta:</span> ${iss.accountType}</div>` : ""}
+      </div>
+    </div>`: ""}
+  </div>
+
+  <div class="ftr">
+    <div style="font-size:7.5pt;color:#535353;font-weight:500;line-height:1.8">${iss.name || ""}${iss.title ? ` · ${iss.title}` : ""}</div>
+    <div style="font-size:7.5pt;color:#535353;line-height:1.8">${iss.email ? `Correo electrónico: ${iss.email}` : ""}${iss.email && iss.phone ? "  │  " : ""}${iss.phone ? `Teléfono: ${iss.phone}` : ""}</div>
+  </div>
+</div>
+<script>
+  window.onload = function() {
+    setTimeout(function() {
+      document.title = "${filename}";
+      window.print();
+      setTimeout(function(){ window.close(); }, 1500);
+    }, 1200);
+  };
+</script>
+</body>
+</html>`;
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      resolve(false);
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    resolve(true);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/*  APP                                                               */
+/* ═══════════════════════════════════════════════════════════════════ */
+
+export default function App() {
+  const [quotes, setQuotes] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [issuer, setIssuer] = useState(DEF_ISS);
+  const [view, setView] = useState("list");
+  const [cur, setCur] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    async function init() {
+      try {
+        setLoading(true);
+        const [qs, cs, iss] = await Promise.all([fetchQuotes(), fetchClients(), fetchIssuer()]);
+        setQuotes(qs); setClients(cs); setIssuer(iss);
+      } catch (err) {
+        notify("Error al cargar: " + err.message, "err");
+      } finally { setLoading(false); }
+    }
+    init();
+  }, []);
+
+  const notify = (msg, t = "ok") => { setToast({ msg, t }); setTimeout(() => setToast(null), 2800) };
+
+  const totals = (items) => calcTotals(items);
+
+  const newQ = async () => {
+    try {
+      setSaving(true);
+      const nextNumber = await getNextNumber();
+      setCur({ ...mkQuote(issuer), number: nextNumber });
+      setView("editor");
+    } catch (err) {
+      console.error("No se pudo obtener el siguiente número de cotización", err);
+      notify("No se pudo obtener el siguiente número. Puedes seguir y se asignará al guardar.", "info");
+      setCur(mkQuote(issuer));
+      setView("editor");
+    } finally { setSaving(false); }
+  };
+
+  const editQ = async (q) => {
+    try {
+      setSaving(true);
+      const full = q.items?.length > 0 ? q : await fetchQuote(q.id);
+      setCur({ ...full }); setView("editor");
+    } catch (err) { notify("Error al cargar", "err"); }
+    finally { setSaving(false); }
+  };
+
+  const prevQ = async (q) => {
+    try {
+      setSaving(true);
+      const full = (q.number === null || q.items?.length > 0) ? q : await fetchQuote(q.id);
+      setCur({ ...full }); setView("preview");
+    } catch (err) { notify("Error al cargar", "err"); }
+    finally { setSaving(false); }
+  };
+
+  const saveQ = async (q) => {
+    try {
+      setSaving(true);
+      const isNew = !quotes.some((x) => x.id === q.id);
+      const saved = await dbSave(q, isNew);
+      setQuotes(prev => {
+        const idx = prev.findIndex(x => x.id === saved.id);
+        const nextQuote = withQuoteSummary({ ...saved, items: q.items });
+        if (idx >= 0) { const n = [...prev]; n[idx] = nextQuote; return n; }
+        return [nextQuote, ...prev];
+      });
+      try {
+        const cs = await fetchClients();
+        setClients(cs);
+      } catch (err) {
+        console.warn("No se pudo refrescar el historial de clientes", err);
+      }
+
+      const iss = { ...issuer, ...q.issuer };
+      notify("Cotización guardada ✓");
+      setView("list");
+
+      try {
+        const pdfOk = await generatePDF({ ...q, number: saved.number }, iss);
+        if (!pdfOk) {
+          notify("Cotización guardada. El navegador bloqueó el PDF.", "info");
+        }
+      } catch (err) {
+        console.error("Error al generar PDF", err);
+        notify("Cotización guardada. No se pudo generar el PDF.", "info");
+      }
+    } catch (err) { notify("Error: " + err.message, "err"); console.error(err); }
+    finally { setSaving(false); }
+  };
+
+  const delQ = async (id) => {
+    try {
+      setSaving(true);
+      await dbDelete(id);
+      setQuotes(prev => prev.filter(q => q.id !== id));
+      notify("Eliminada", "info");
+    } catch (err) { notify("Error al eliminar", "err"); }
+    finally { setSaving(false); }
+  };
+
+  const dupQ = async (q) => {
+    try {
+      setSaving(true);
+      const full = q.items?.length > 0 ? q : await fetchQuote(q.id);
+      const dup = await dbDuplicate(full);
+      setQuotes(prev => [dup, ...prev]);
+      notify("Duplicada ✓");
+    } catch (err) { notify("Error al duplicar", "err"); }
+    finally { setSaving(false); }
+  };
+
+  const saveIssuerData = async (data) => {
+    try {
+      setSaving(true);
+      await dbSaveIssuer(data);
+      setIssuer(data);
+      notify("Ajustes guardados ✓");
+      setView("list");
+    } catch (err) { notify("Error al guardar ajustes", "err"); }
+    finally { setSaving(false); }
+  };
+
+  const delClient = async (id) => {
+    try { await deleteClient(id); setClients(prev => prev.filter(c => c.id !== id)); }
+    catch (err) { notify("Error al eliminar cliente", "err"); }
+  };
+
+  const saveClientData = async (client) => {
+    try {
+      const id = await dbSaveClient(client);
+      const updated = { ...client, id };
+      setClients(prev => {
+        if (client.id) return prev.map(c => c.id === client.id ? updated : c);
+        return [updated, ...prev];
+      });
+      notify(client.id ? "Cliente actualizado ✓" : "Cliente creado ✓");
+      return id;
+    } catch (err) { notify("Error al guardar cliente: " + err.message, "err"); throw err; }
+  };
+
+  if (loading) return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: F, background: "#f5f5f5" }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ width: 40, height: 40, border: "3px solid #ddd", borderTopColor: "#000", borderRadius: "50%", animation: "spin .8s linear infinite", margin: "0 auto 16px" }} />
+        <p style={{ fontSize: 14, color: C.gray, fontWeight: 500 }}>Cargando cotizaciones…</p>
+      </div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#e8e8e8", fontFamily: F, position: "relative" }}>
+      <style>{`
+        *{box-sizing:border-box;margin:0;padding:0}
+        input,textarea,select,button{font-family:${F}}
+        button{cursor:pointer}
+        .fd{animation:fd .18s ease}
+        @keyframes fd{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes progress{0%{width:0;opacity:1}80%{width:100%;opacity:1}100%{width:100%;opacity:0}}
+        input:focus,textarea:focus,select:focus{outline:2px solid #000;outline-offset:1px;border-color:#000!important}
+        @media print{body>*{display:none!important}#PDFDOC{display:block!important;position:fixed;inset:0;background:white;overflow:auto;z-index:99999}.NOPRINT{display:none!important}}
+      `}</style>
+
+      {saving && <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: 3, background: "#000", animation: "progress 1.2s ease infinite", zIndex: 9999 }} />}
+
+      {toast && (
+        <div style={{ position: "fixed", top: 16, right: 16, zIndex: 9999, background: toast.t === "ok" ? "#000" : toast.t === "err" ? "#dc2626" : "#555", color: "#fff", padding: "9px 18px", borderRadius: 5, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,.2)", animation: "fd .2s ease" }}>
+          {toast.msg}
+        </div>
+      )}
+
+      {view === "list" && <ListView quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} />}
+      {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => setView("list")} onPreview={q => { setCur(q); setView("preview") }} totals={totals} clients={clients} issuer={issuer} />}
+      {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => setView("list")} totals={totals} issuer={issuer} onExport={(q, iss) => generatePDF(q, iss)} />}
+      {view === "settings" && <SettingsView issuer={issuer} clients={clients} onSave={saveIssuerData} onDelClient={delClient} onBack={() => setView("list")} />}
+      {view === "clients" && <ClientsView clients={clients} onSave={saveClientData} onDelete={delClient} onBack={() => setView("list")} />}
+    </div>
+  );
+}
+
+/* ─── LIST ─────────────────────────────────────────────────────────── */
+function ListView({ quotes, onNew, onEdit, onPreview, onDelete, onDup, onSettings, onClients, totals }) {
+  const [flt, setFlt] = useState("all");
+  const [srch, setSrch] = useState("");
+  const rows = quotes.filter(q => (flt === "all" || q.status === flt) && (q.client?.name?.toLowerCase().includes(srch.toLowerCase()) || String(q.number).includes(srch)));
+  return (
+    <div style={{ maxWidth: 940, margin: "0 auto", padding: "36px 20px" }} className="fd">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 28 }}>
+        <div>
+          <h1 style={{ fontSize: 26, fontWeight: 700, color: C.black, letterSpacing: "-0.5px" }}>Cotizaciones</h1>
+          <p style={{ color: C.gray, fontSize: 13, marginTop: 3 }}>{quotes.length} documento{quotes.length !== 1 ? "s" : ""}</p>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Btn g onClick={onSettings}>⚙ Ajustes</Btn>
+          <Btn g onClick={onClients}>👥 Clientes</Btn>
+          <Btn s onClick={onNew}>+ Nueva cotización</Btn>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        {["all", "draft", "sent", "accepted", "rejected"].map(s => (
+          <button key={s} onClick={() => setFlt(s)} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: ".5px", border: `1.5px solid ${flt === s ? "#000" : "#ccc"}`, background: flt === s ? "#000" : "#fff", color: flt === s ? "#fff" : "#666", transition: "all .12s" }}>
+            {s === "all" ? "TODAS" : SL[s].toUpperCase()}
+          </button>
+        ))}
+        <input value={srch} onChange={e => setSrch(e.target.value)} placeholder="Buscar…" style={{ marginLeft: "auto", padding: "5px 13px", borderRadius: 20, border: "1.5px solid #ccc", fontSize: 13, width: 180, background: "#fff" }} />
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "70px 0", color: C.gray }}>
+          <div style={{ fontSize: 44, marginBottom: 12 }}>📄</div>
+          <p style={{ fontSize: 15, fontWeight: 500 }}>No hay cotizaciones aún.</p>
+          <button onClick={onNew} style={{ marginTop: 18, padding: "9px 22px", background: "#000", color: "#fff", border: "none", borderRadius: 5, fontSize: 13, fontWeight: 600 }}>Crear la primera</button>
+        </div>
+      ) : (
+        <div style={{ background: "#fff", borderRadius: 4, border: "1px solid #ddd", overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.06)" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: C.bgTop, borderBottom: "2px solid #ccc" }}>
+                {["N°", "Cliente", "Emisión", "Válida hasta", "Total", "Estado", ""].map(h => (
+                  <th key={h} style={{ padding: "11px 16px", textAlign: "left", fontSize: 10, color: C.gray, fontWeight: 700, letterSpacing: ".8px", textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((q, i) => {
+                const total = q.summary?.total ?? totals(q.items).total;
+                const sc = SC[q.status];
+                const exp = q.status === "sent" && q.validUntil < today();
+                return (
+                  <tr key={q.id} style={{ borderBottom: i < rows.length - 1 ? "1px solid #f0f0f0" : "none", transition: "background .1s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "#fafafa"}
+                    onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                    <td style={{ padding: "13px 16px", fontSize: 13, fontWeight: 700, color: C.black }}>#{pad(q.number)}</td>
+                    <td style={{ padding: "13px 16px" }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: C.black }}>{q.client?.name || <span style={{ color: "#bbb", fontStyle: "italic", fontWeight: 400 }}>Sin cliente</span>}</div>
+                      {q.client?.contact && <div style={{ fontSize: 12, color: C.gray, marginTop: 1 }}>{q.client.contact}</div>}
+                    </td>
+                    <td style={{ padding: "13px 16px", fontSize: 13, color: C.gray }}>{fmtDate(q.issueDate)}</td>
+                    <td style={{ padding: "13px 16px", fontSize: 13, color: exp ? "#dc2626" : C.gray, fontWeight: exp ? 600 : 400 }}>{fmtDate(q.validUntil)}{exp ? " ⚠" : ""}</td>
+                    <td style={{ padding: "13px 16px", fontSize: 14, fontWeight: 700, color: C.black }}>{fmtNum(total, q.currency)}</td>
+                    <td style={{ padding: "13px 16px" }}>
+                      <span style={{ padding: "3px 11px", borderRadius: 20, fontSize: 10, fontWeight: 700, letterSpacing: ".4px", background: sc.bg, color: sc.color, border: `1px solid ${sc.bd}` }}>{SL[q.status].toUpperCase()}</span>
+                    </td>
+                    <td style={{ padding: "13px 16px" }}>
+                      <div style={{ display: "flex", gap: 5 }}>
+                        <IB title="Editar" onClick={() => onEdit(q)}>✏️</IB>
+                        <IB title="Previsualizar" onClick={() => onPreview(q)}>👁</IB>
+                        <IB title="Duplicar" onClick={() => onDup(q)}>⧉</IB>
+                        <IB title="Eliminar" d onClick={() => { if (confirm("¿Eliminar?")) onDelete(q.id) }}>🗑</IB>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── EDITOR ────────────────────────────────────────────────────────── */
+function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients, issuer }) {
+  const [q, setQ] = useState(init);
+  const [cs, setCs] = useState(init.client?.name || "");
+  const [dd, setDd] = useState(false);
+
+  const sc = (f, v) => setQ(p => ({ ...p, client: { ...p.client, [f]: v } }));
+  const se = (f, v) => setQ(p => ({ ...p, equipment: { ...p.equipment, [f]: v } }));
+  const si = (f, v) => setQ(p => ({ ...p, issuer: { ...p.issuer, [f]: v } }));
+  const itm = (id, f, v) => setQ(p => ({ ...p, items: p.items.map(i => i.id === id ? { ...i, [f]: v } : i) }));
+  const addI = () => setQ(p => ({ ...p, items: [...p.items, mkItem()] }));
+  const rmI = (id) => setQ(p => ({ ...p, items: p.items.filter(i => i.id !== id) }));
+
+  const { sub, shp, total } = totals(q.items);
+  const fltC = clients.filter(c => c.name.toLowerCase().includes(cs.toLowerCase()));
+  const iss = { ...issuer, ...q.issuer };
+
+  const handleLogo = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader(); r.onload = (ev) => si("logoDataUrl", ev.target.result); r.readAsDataURL(f);
+  };
+
+  const go = () => {
+    if (!q.items.some(i => i.description.trim())) { alert("Agrega al menos un ítem."); return }
+    onSave(q);
+  };
+
+  return (
+    <div style={{ maxWidth: 940, margin: "0 auto", padding: "32px 20px" }} className="fd">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+        <div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", color: C.gray, fontSize: 13, padding: 0, fontWeight: 500 }}>← Volver</button>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: C.black, marginTop: 4 }}>
+            {q.number != null ? `Cotización #${pad(q.number)}` : "Nueva cotización"}
+          </h2>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Btn g onClick={() => onPreview(q)}>👁 Previsualizar</Btn>
+          <Btn s onClick={go}>Guardar</Btn>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <Sec t="Estado y fechas">
+          <F2 l="Estado"><select value={q.status} onChange={e => setQ(p => ({ ...p, status: e.target.value }))} style={IS}>{Object.entries(SL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></F2>
+          <F2 l="Fecha de emisión"><input type="date" value={q.issueDate} onChange={e => setQ(p => ({ ...p, issueDate: e.target.value }))} style={IS} /></F2>
+          <F2 l="Válida hasta"><input type="date" value={q.validUntil} onChange={e => setQ(p => ({ ...p, validUntil: e.target.value }))} style={IS} /></F2>
+          <F2 l="Moneda"><select value={q.currency} onChange={e => setQ(p => ({ ...p, currency: e.target.value }))} style={IS}><option value="CLP">CLP – Peso Chileno</option><option value="USD">USD – Dólar</option><option value="UF">UF</option></select></F2>
+        </Sec>
+
+        <Sec t="Datos del cliente">
+          <F2 l="Nombre / Empresa">
+            <div style={{ position: "relative" }}>
+              <input value={cs} onChange={e => { setCs(e.target.value); sc("name", e.target.value); setDd(true) }} onFocus={() => setDd(true)} onBlur={() => setTimeout(() => setDd(false), 180)} placeholder="Buscar o escribir…" style={IS} />
+              {dd && fltC.length > 0 && (
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #ddd", borderRadius: 6, zIndex: 200, boxShadow: "0 4px 16px rgba(0,0,0,.1)", maxHeight: 150, overflowY: "auto" }}>
+                  {fltC.map(c => (
+                    <div key={c.id} onMouseDown={() => { setQ(p => ({ ...p, client: { name: c.name, contact: c.contact || "", website: c.website || "", rut: c.rut || "", phone: c.client_phone || "" } })); setCs(c.name); setDd(false) }} style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid #f4f4f4" }} onMouseEnter={e => e.currentTarget.style.background = "#f8f8f8"} onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                      <strong>{c.name}</strong>{c.contact && <span style={{ color: C.gray, marginLeft: 6, fontWeight: 400 }}>{c.contact}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </F2>
+          <F2 l="Contacto"><input value={q.client.contact} onChange={e => sc("contact", e.target.value)} placeholder="Nombre del contacto" style={IS} /></F2>
+          <F2 l="RUT"><input value={q.client.rut} onChange={e => sc("rut", e.target.value)} placeholder="12.345.678-9" style={IS} /></F2>
+          <F2 l="Teléfono"><input value={q.client.phone || ""} onChange={e => sc("phone", e.target.value)} placeholder="+56 9 1234 5678" style={IS} /></F2>
+          <F2 l="Sitio web"><input value={q.client.website} onChange={e => sc("website", e.target.value)} placeholder="https://…" style={IS} /></F2>
+        </Sec>
+
+        <Sec t="Detalle del equipo">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: q.equipment?.enabled ? 14 : 0 }}>
+            <button onClick={() => se("enabled", !q.equipment?.enabled)} style={{ width: 38, height: 22, borderRadius: 11, border: "none", background: q.equipment?.enabled ? "#000" : "#ccc", position: "relative", transition: "background .2s", flexShrink: 0 }}>
+              <span style={{ position: "absolute", top: 3, left: q.equipment?.enabled ? 18 : 3, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+            </button>
+            <span style={{ fontSize: 12, color: q.equipment?.enabled ? C.black : C.gray, fontWeight: q.equipment?.enabled ? 600 : 400 }}>
+              {q.equipment?.enabled ? "Incluido en cotización" : "No incluir (desarrollo web…)"}
+            </span>
+          </div>
+          {q.equipment?.enabled && (
+            <>
+              <F2 l="Marca"><input value={q.equipment?.brand || ""} onChange={e => se("brand", e.target.value)} placeholder="Ej: Dell, HP, Lenovo…" style={IS} /></F2>
+              <F2 l="Modelo"><input value={q.equipment?.model || ""} onChange={e => se("model", e.target.value)} placeholder="Ej: Latitude 5520…" style={IS} /></F2>
+              <F2 l="N° de Serie (SN)"><input value={q.equipment?.serial || ""} onChange={e => se("serial", e.target.value)} placeholder="Número de serie" style={IS} /></F2>
+              <F2 l="Año"><input value={q.equipment?.year || ""} onChange={e => se("year", e.target.value)} placeholder="Ej: 2022" style={IS} /></F2>
+              <F2 l="Observaciones"><input value={q.equipment?.extra || ""} onChange={e => se("extra", e.target.value)} placeholder="Color, estado, etc." style={IS} /></F2>
+            </>
+          )}
+        </Sec>
+      </div>
+
+      <Sec t="Datos del emisor" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #f0f0f0" }}>
+          <div style={{ width: 60, height: 60, borderRadius: "50%", background: "#000", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {iss.logoDataUrl ? <img src={iss.logoDataUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontSize: 18, fontWeight: 700, letterSpacing: "-1px" }}>{(iss.name || "").split(" ").map(w => w[0]).join("").slice(0, 2) || "N!"}</span>}
+          </div>
+          <div>
+            <p style={{ fontSize: 11, color: C.gray, fontWeight: 600, marginBottom: 6, letterSpacing: ".5px" }}>LOGOTIPO</p>
+            <label style={{ cursor: "pointer", padding: "6px 14px", background: C.bgTop, border: "1.5px solid #ccc", borderRadius: 5, fontSize: 12, fontWeight: 600, color: C.gray }}>
+              {iss.logoDataUrl ? "Cambiar imagen" : "Subir imagen (PNG/JPG)"}
+              <input type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
+            </label>
+            {iss.logoDataUrl && <button onClick={() => si("logoDataUrl", null)} style={{ marginLeft: 8, background: "none", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 600 }}>Quitar</button>}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          {[["name", "Nombre completo"], ["title", "Título / Profesión"], ["email", "Email"], ["phone", "Teléfono"], ["website", "Sitio web"], ["bank", "Banco"], ["accountName", "Nombre de cuenta"], ["accountNumber", "N° de cuenta"], ["accountType", "Tipo de cuenta"]].map(([k, lbl]) => (
+            <F2 key={k} l={lbl}><input value={q.issuer?.[k] ?? issuer[k] ?? ""} onChange={e => si(k, e.target.value)} style={IS} /></F2>
+          ))}
+        </div>
+      </Sec>
+
+      <Sec t="Ítems" style={{ marginBottom: 16 }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: C.bgTop, borderBottom: "1.5px solid #ccc" }}>
+                {["Descripción", "Link", "Cant.", "Precio unit. (líquido)", "Envío", "Subtotal", ""].map(h => (
+                  <th key={h} style={{ padding: "9px 8px", textAlign: "left", fontSize: 10, color: C.gray, fontWeight: 700, letterSpacing: ".5px", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {q.items.map(item => {
+                const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
+                return (
+                  <tr key={item.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "7px 6px" }}><input value={item.description} onChange={e => itm(item.id, "description", e.target.value)} placeholder="Producto o servicio…" style={{ ...IS, minWidth: 170 }} /></td>
+                    <td style={{ padding: "7px 6px" }}><input value={item.link} onChange={e => itm(item.id, "link", e.target.value)} placeholder="https://…" style={{ ...IS, minWidth: 120 }} /></td>
+                    <td style={{ padding: "7px 6px" }}><input type="number" min="1" value={item.qty} onChange={e => itm(item.id, "qty", e.target.value)} style={{ ...IS, width: 58 }} /></td>
+                    <td style={{ padding: "7px 6px" }}><input type="number" min="0" value={item.unitPrice} onChange={e => itm(item.id, "unitPrice", e.target.value)} placeholder="0" style={{ ...IS, width: 120 }} /></td>
+                    <td style={{ padding: "7px 6px" }}><input type="number" min="0" value={item.shipping} onChange={e => itm(item.id, "shipping", e.target.value)} placeholder="0" style={{ ...IS, width: 95 }} /></td>
+                    <td style={{ padding: "7px 6px", fontWeight: 700, color: C.black, whiteSpace: "nowrap" }}>{fmtNum(sv, q.currency)}</td>
+                    <td style={{ padding: "7px 6px" }}>{q.items.length > 1 && <button onClick={() => rmI(item.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, lineHeight: 1 }}>×</button>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <button onClick={addI} style={{ marginTop: 10, width: "100%", background: "none", border: "1.5px dashed #ccc", color: C.gray, padding: "7px", borderRadius: 5, fontSize: 13, fontWeight: 500, transition: "all .12s" }} onMouseEnter={e => { e.currentTarget.style.borderColor = "#000"; e.currentTarget.style.color = "#000" }} onMouseLeave={e => { e.currentTarget.style.borderColor = "#ccc"; e.currentTarget.style.color = C.gray }}>
+          + Agregar ítem
+        </button>
+        <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ minWidth: 280 }}>
+            <TR l="Subtotal" v={fmtNum(sub, q.currency)} />
+            {shp > 0 && <TR l="Envío total" v={fmtNum(shp, q.currency)} />}
+            <div style={{ height: 1, background: C.black, margin: "8px 0" }} />
+            <TR l="Total" v={fmtNum(total, q.currency)} b />
+          </div>
+        </div>
+      </Sec>
+
+      <Sec t="Notas / Condiciones">
+        <textarea value={q.notes} onChange={e => setQ(p => ({ ...p, notes: e.target.value }))} placeholder="Consideraciones, condiciones al pie…" rows={4} style={{ ...IS, width: "100%", resize: "vertical" }} />
+      </Sec>
+    </div>
+  );
+}
+
+/* ─── PREVIEW ───────────────────────────────────────────────────────── */
+function PreviewView({ quote: q, onBack, onList, totals, issuer: gIss, onExport }) {
+  const iss = { ...gIss, ...q.issuer };
+  const { sub, shp, total } = totals(q.items);
+  const sc = SC[q.status];
+  const exp = q.status === "sent" && q.validUntil < today();
+  const hasShp = q.items.some(i => parseFloat(i.shipping) > 0);
+  const logo = iss.logoDataUrl;
+  const quoteNumberLabel = fmtQuoteNumber(q.number);
+  const initials = (iss.name || "").split(" ").map(w => w[0]).join("").slice(0, 2) || "N!";
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#c8c8c8", padding: "28px 16px", fontFamily: F }}>
+      <div style={{ maxWidth: 680, margin: "0 auto 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn g onClick={onBack}>← Editar</Btn>
+          <Btn g onClick={onList}>Lista</Btn>
+        </div>
+        <Btn s onClick={() => onExport(q, iss)}>⬇ Exportar PDF</Btn>
+      </div>
+
+      <div id="QUOTE_DOC" style={{ maxWidth: 680, margin: "0 auto", background: "#fff", boxShadow: "0 6px 40px rgba(0,0,0,.22)", fontFamily: F, fontSize: 10 }}>
+        <div style={{ background: C.bgTop, padding: "24px 36px 22px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <div style={{ width: 52, height: 52, borderRadius: "50%", background: "#000", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {logo ? <img src={logo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontSize: 16, fontWeight: 700, letterSpacing: "-1px" }}>{initials}</span>}
+            </div>
+            <div style={{ lineHeight: 1.6 }}>
+              <p style={{ fontSize: 14, fontWeight: 600, color: C.black, lineHeight: 1.2 }}>{iss.name}</p>
+              {iss.title && <p style={{ fontSize: 10, color: C.black, fontWeight: 400 }}>{iss.title}</p>}
+              {iss.website && <p style={{ fontSize: 10, color: C.black, fontWeight: 400 }}>{iss.website}</p>}
+              {iss.phone && <p style={{ fontSize: 10, color: C.black, fontWeight: 400 }}>{iss.phone}</p>}
+              {iss.email && <p style={{ fontSize: 10, color: C.black, fontWeight: 400 }}>{iss.email}</p>}
+            </div>
+          </div>
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
+            <p style={{ fontSize: 11, fontWeight: 600, color: C.black }}>Cotización Nro: <strong style={{ fontWeight: 700 }}>{quoteNumberLabel}</strong></p>
+            <p style={{ fontSize: 9, color: C.gray, marginTop: 6, fontWeight: 500 }}>Emisión: {fmtDate(q.issueDate)}</p>
+            <p style={{ fontSize: 9, color: exp ? "#dc2626" : C.gray, fontWeight: 500 }}>Válida hasta: {fmtDate(q.validUntil)}{exp ? " ⚠" : ""}</p>
+            <span style={{ display: "inline-block", marginTop: 8, padding: "2px 10px", borderRadius: 20, fontSize: 9, fontWeight: 700, letterSpacing: ".5px", background: sc.bg, color: sc.color, border: `1px solid ${sc.bd}` }}>
+              {SL[q.status].toUpperCase()}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ padding: "28px 36px" }}>
+          {(q.client.name || q.client.contact || q.client.rut || q.client.phone || q.client.website || q.equipment?.enabled) && (
+            <div style={{ display: "grid", gridTemplateColumns: q.equipment?.enabled ? "1fr 1fr" : "1fr", gap: 24, marginBottom: 26 }}>
+              <div>
+                {q.client.name && <p style={{ fontSize: 14, fontWeight: 700, color: C.black }}>{q.client.name}</p>}
+                {q.client.contact && <p style={{ fontSize: 10, color: C.black, marginTop: 2 }}>{q.client.contact}</p>}
+                {q.client.rut && <p style={{ fontSize: 10, color: C.black }}>RUT: {q.client.rut}</p>}
+                {q.client.phone && <p style={{ fontSize: 10, color: C.black }}>Tel: {q.client.phone}</p>}
+                {q.client.website && <p style={{ fontSize: 10, color: C.black }}>{q.client.website}</p>}
+              </div>
+              {q.equipment?.enabled && (q.equipment.brand || q.equipment.model || q.equipment.serial || q.equipment.year || q.equipment.extra) && (
+                <div style={{ borderLeft: `1px solid #e0e0e0`, paddingLeft: 20 }}>
+                  <p style={{ fontSize: 9, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 6 }}>Detalle del equipo</p>
+                  <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
+                    {[["Marca", q.equipment.brand], ["Modelo", q.equipment.model], ["N° Serie", q.equipment.serial], ["Año", q.equipment.year], ["Obs.", q.equipment.extra]]
+                      .filter(([, v]) => v).map(([label, val]) => (
+                        <tr key={label}>
+                          <td style={{ fontSize: 9, color: C.gray, fontWeight: 600, paddingRight: 8, paddingBottom: 3, whiteSpace: "nowrap", verticalAlign: "top" }}>{label}:</td>
+                          <td style={{ fontSize: 9, color: C.black, paddingBottom: 3, verticalAlign: "top" }}>{val}</td>
+                        </tr>
+                      ))}
+                  </tbody></table>
+                </div>
+              )}
+            </div>
+          )}
+
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 18 }}>
+            <thead>
+              <tr>
+                <th style={{ ...THS, width: "40%" }}>Articulo</th>
+                <th style={{ ...THS, textAlign: "center" }}>Cantidad</th>
+                <th style={{ ...THS, textAlign: "center" }}>Precio Uni.</th>
+                {hasShp && <th style={{ ...THS, textAlign: "center" }}>Envío</th>}
+                <th style={{ ...THS, textAlign: "right" }}>SUBTOTAL</th>
+              </tr>
+              <tr><td colSpan={hasShp ? 5 : 4}><div style={{ height: "0.75px", background: C.gray }} /></td></tr>
+            </thead>
+            <tbody>
+              {q.items.filter(i => i.description.trim()).map((item) => {
+                const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
+                return (
+                  <tr key={item.id}>
+                    <td style={{ ...TDS, borderBottom: `0.75px solid ${C.gray}` }}>
+                      <p style={{ fontWeight: 700, color: C.black, fontSize: 10 }}>{item.description}</p>
+                      {item.link && <p style={{ marginTop: 2 }}><a href={item.link} style={{ color: "#2563eb", fontSize: 9, textDecoration: "none" }}>{item.link}</a></p>}
+                    </td>
+                    <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{item.qty} {parseFloat(item.qty) === 1 ? "Unidad" : "Unidades"}</td>
+                    <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{fmtNum(item.unitPrice, q.currency)}</td>
+                    {hasShp && <td style={{ ...TDS, textAlign: "center", borderBottom: `0.75px solid ${C.gray}` }}>{item.shipping ? fmtNum(item.shipping, q.currency) : "—"}</td>}
+                    <td style={{ ...TDS, textAlign: "right", borderBottom: `0.75px solid ${C.gray}` }}>{fmtNum(sv, q.currency)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 32 }}>
+            <div>
+              {shp > 0 && (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 32, fontSize: 10, color: C.gray, padding: "2px 0" }}><span>Subtotal</span><span>{fmtNum(sub, q.currency)}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 32, fontSize: 10, color: C.gray, padding: "2px 0" }}><span>Envío</span><span>{fmtNum(shp, q.currency)}</span></div>
+                </>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "baseline", gap: 10, marginTop: 4 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.gray }}>Total:</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.gray }}>{fmtNum(total, q.currency)}</span>
+              </div>
+            </div>
+          </div>
+
+          {q.notes && (
+            <div style={{ marginBottom: 24 }}>
+              <p style={{ fontSize: 10, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 6 }}>Notas y condiciones</p>
+              <div style={{ height: "0.75px", background: C.gray, marginBottom: 8 }} />
+              <p style={{ fontSize: 10, color: C.gray, lineHeight: 1.7, whiteSpace: "pre-line" }}>{q.notes}</p>
+            </div>
+          )}
+
+          {(iss.bank || iss.accountNumber) && (
+            <div style={{ marginBottom: 24 }}>
+              <p style={{ fontSize: 10, fontWeight: 600, color: C.gray, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 8 }}>Información de pago</p>
+              <div style={{ fontSize: 9, color: C.gray, lineHeight: 2 }}>
+                {iss.bank && <p><span style={{ fontWeight: 500 }}>Banco:</span> {iss.bank}</p>}
+                {iss.accountName && <p><span style={{ fontWeight: 500 }}>Nombre:</span> {iss.accountName}</p>}
+                {iss.accountNumber && <p><span style={{ fontWeight: 500 }}>Número de cuenta:</span> {iss.accountNumber}</p>}
+                {iss.accountType && <p><span style={{ fontWeight: 500 }}>Tipo de cuenta:</span> {iss.accountType}</p>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ borderTop: "1px solid #ccc", padding: "12px 36px", textAlign: "center" }}>
+          <p style={{ fontSize: 8, color: C.gray, fontWeight: 500, lineHeight: 1.8 }}>{iss.name}{iss.title && ` · ${iss.title}`}</p>
+          <p style={{ fontSize: 8, color: C.gray, lineHeight: 1.8 }}>
+            {iss.email && `Correo electrónico: ${iss.email}`}
+            {iss.email && iss.phone && "  │  "}
+            {iss.phone && `Teléfono: ${iss.phone}`}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── SETTINGS ──────────────────────────────────────────────────────── */
+function SettingsView({ issuer: init, clients, onSave, onDelClient, onBack }) {
+  const [f, setF] = useState(init);
+  const s = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const handleLogo = (e) => { const fl = e.target.files[0]; if (!fl) return; const r = new FileReader(); r.onload = (ev) => s("logoDataUrl", ev.target.result); r.readAsDataURL(fl) };
+  return (
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "36px 20px" }} className="fd">
+      <button onClick={onBack} style={{ background: "none", border: "none", color: C.gray, fontSize: 13, marginBottom: 16, cursor: "pointer", fontWeight: 500 }}>← Volver</button>
+      <h2 style={{ fontSize: 22, fontWeight: 700, color: C.black, marginBottom: 24 }}>Ajustes del emisor</h2>
+
+      <Sec t="Logotipo" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div style={{ width: 68, height: 68, borderRadius: "50%", background: "#000", flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {f.logoDataUrl ? <img src={f.logoDataUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ color: "#fff", fontSize: 20, fontWeight: 700 }}>{(f.name || "N").charAt(0)}</span>}
+          </div>
+          <div>
+            <label style={{ cursor: "pointer", display: "inline-block", padding: "8px 18px", background: C.bgTop, border: "1.5px solid #ccc", borderRadius: 5, fontSize: 13, fontWeight: 600, color: C.gray }}>
+              {f.logoDataUrl ? "Cambiar logotipo" : "Subir logotipo"} (PNG/JPG)
+              <input type="file" accept="image/*" onChange={handleLogo} style={{ display: "none" }} />
+            </label>
+            {f.logoDataUrl && <button onClick={() => s("logoDataUrl", null)} style={{ marginLeft: 10, background: "none", border: "none", color: "#dc2626", fontSize: 13, fontWeight: 600 }}>Quitar</button>}
+            <p style={{ fontSize: 11, color: C.gray, marginTop: 6 }}>Aparece en el encabezado. Recomendado: imagen cuadrada.</p>
+          </div>
+        </div>
+      </Sec>
+
+      <Sec t="Datos personales" style={{ marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          {[["name", "Nombre completo"], ["title", "Título / Profesión"], ["email", "Email"], ["phone", "Teléfono"], ["website", "Sitio web"]].map(([k, l]) => (
+            <F2 key={k} l={l}><input value={f[k] || ""} onChange={e => s(k, e.target.value)} style={IS} /></F2>
+          ))}
+        </div>
+      </Sec>
+
+      <Sec t="Información de pago" style={{ marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          {[["bank", "Banco"], ["accountName", "Nombre de cuenta"], ["accountNumber", "N° de cuenta"], ["accountType", "Tipo de cuenta"]].map(([k, l]) => (
+            <F2 key={k} l={l}><input value={f[k] || ""} onChange={e => s(k, e.target.value)} style={IS} /></F2>
+          ))}
+        </div>
+        <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+          <Btn s onClick={() => onSave(f)}>Guardar ajustes</Btn>
+        </div>
+      </Sec>
+
+      {clients.length > 0 && (
+        <Sec t={`Historial de clientes (${clients.length})`}>
+          {clients.map(c => (
+            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #f0f0f0" }}>
+              <div>
+                <strong style={{ fontSize: 14 }}>{c.name}</strong>
+                {c.contact && <span style={{ color: C.gray, fontSize: 12, marginLeft: 8 }}>{c.contact}</span>}
+                {c.rut && <span style={{ color: C.gray, fontSize: 12, marginLeft: 8 }}>RUT: {c.rut}</span>}
+              </div>
+              <button onClick={() => { if (confirm("¿Eliminar cliente?")) onDelClient(c.id) }} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 20, cursor: "pointer" }}>×</button>
+            </div>
+          ))}
+        </Sec>
+      )}
+    </div>
+  );
+}
+
+/* ─── SHARED ATOMS ──────────────────────────────────────────────────── */
+const IS = { width: "100%", padding: "7px 10px", border: "1.5px solid #ddd", borderRadius: 5, fontSize: 13, color: C.black, background: C.white, fontFamily: F };
+const THS = { padding: "0 8px 8px 0", textAlign: "left", fontSize: 11, fontWeight: 600, color: C.black, fontFamily: F, verticalAlign: "bottom" };
+const TDS = { padding: "10px 8px 10px 0", fontSize: 10, color: C.black, verticalAlign: "top", fontFamily: F };
+
+function Sec({ t, children, style }) { return <div style={{ background: C.white, border: "1px solid #ddd", borderRadius: 4, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.05)", ...style }}>{t && <p style={{ fontSize: 11, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 14 }}>{t}</p>}{children}</div> }
+function F2({ l, children }) { return <div style={{ marginBottom: 10 }}><label style={{ display: "block", fontSize: 11, color: C.gray, fontWeight: 600, marginBottom: 4, letterSpacing: ".3px" }}>{l}</label>{children}</div> }
+function TR({ l, v, b }) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: b ? 14 : 12, fontWeight: b ? 700 : 400, color: b ? C.black : C.gray }}><span>{l}</span><span>{v}</span></div> }
+function Btn({ children, onClick, s, g }) { return <button onClick={onClick} style={{ padding: "8px 18px", borderRadius: 5, fontSize: 13, fontWeight: 600, border: `1.5px solid ${s ? "#000" : "#ccc"}`, background: s ? "#000" : "#fff", color: s ? "#fff" : "#555", fontFamily: F, transition: "opacity .12s" }} onMouseEnter={e => e.currentTarget.style.opacity = ".75"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>{children}</button> }
+function IB({ children, onClick, title, d }) { return <button onClick={onClick} title={title} style={{ width: 30, height: 30, borderRadius: 5, border: "1px solid #ddd", background: "#fff", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", transition: "all .12s" }} onMouseEnter={e => { e.currentTarget.style.borderColor = d ? "#dc2626" : "#000"; e.currentTarget.style.background = d ? "#fef2f2" : "#f5f5f5" }} onMouseLeave={e => { e.currentTarget.style.borderColor = "#ddd"; e.currentTarget.style.background = "#fff" }}>{children}</button> }
