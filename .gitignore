@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 schema.sql
+.env
+.env
+.env.local
