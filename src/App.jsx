@@ -5,8 +5,14 @@ import {
   saveQuote as dbSave, deleteQuote as dbDelete,
   duplicateQuote as dbDuplicate, saveIssuer as dbSaveIssuer,
   saveClient as dbSaveClient, deleteClient,
+  signIn as signInUser, signOut as signOutUser,
+  getSession, onAuthStateChange,
+  fetchMyProfile, fetchProfiles,
+  createManagedUser, updateProfile,
 } from "./lib/supabase";
 import ClientsView from "./components/views/ClientsView";
+import LoginView from "./components/views/LoginView";
+import AdminView from "./components/views/AdminView";
 
 /* ─── Google Fonts ─────────────────────────────────────────────────── */
 const _fl = document.createElement("link");
@@ -41,8 +47,8 @@ const SC = {
 
 /* ─── Data helpers ─────────────────────────────────────────────────── */
 const mkItem = () => ({ id: crypto.randomUUID(), description: "", qty: 1, unitPrice: "", shipping: "", link: "" });
-const mkQuote = (iss) => ({
-  id: crypto.randomUUID(), number: null, status: "draft",
+const mkQuote = (iss, userId = null) => ({
+  id: crypto.randomUUID(), userId, number: null, status: "draft",
   issueDate: today(), validUntil: addDays(today(), 30),
   client: { name: "", contact: "", website: "", rut: "", phone: "" },
   equipment: { enabled: false, brand: "", model: "", serial: "", year: "", extra: "" },
@@ -278,6 +284,9 @@ function useResponsiveLayout() {
 /* ═══════════════════════════════════════════════════════════════════ */
 
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [profiles, setProfiles] = useState([]);
   const [quotes, setQuotes] = useState([]);
   const [clients, setClients] = useState([]);
   const [issuer, setIssuer] = useState(DEF_ISS);
@@ -286,35 +295,155 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const responsive = useResponsiveLayout();
 
+  const notify = (msg, t = "ok") => { setToast({ msg, t }); setTimeout(() => setToast(null), 2800) };
+  const refreshApp = () => setRefreshKey((prev) => prev + 1);
+
+  const resetAppState = () => {
+    setProfile(null);
+    setProfiles([]);
+    setQuotes([]);
+    setClients([]);
+    setIssuer(DEF_ISS);
+    setCur(null);
+    setView("list");
+  };
+
   useEffect(() => {
-    async function init() {
+    let active = true;
+
+    async function initAuth() {
       try {
-        setLoading(true);
-        const [qs, cs, iss] = await Promise.all([fetchQuotes(), fetchClients(), fetchIssuer()]);
-        setQuotes(qs); setClients(cs); setIssuer(iss);
-      } catch (err) {
-        notify("Error al cargar: " + err.message, "err");
-      } finally { setLoading(false); }
+        const nextSession = await getSession();
+        if (!active) return;
+        setSession(nextSession);
+      } catch {
+        if (!active) return;
+        setAuthError("No se pudo verificar la sesión actual.");
+      } finally {
+        if (active) setAuthReady(true);
+      }
     }
-    init();
+
+    initAuth();
+
+    const { data: { subscription } } = onAuthStateChange((nextSession) => {
+      if (!active) return;
+      setSession(nextSession);
+      setAuthReady(true);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  const notify = (msg, t = "ok") => { setToast({ msg, t }); setTimeout(() => setToast(null), 2800) };
+  useEffect(() => {
+    if (!authReady) return;
+
+    if (!session) {
+      resetAppState();
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadAuthenticatedState() {
+      try {
+        setLoading(true);
+        setAuthError(null);
+
+        const nextProfile = await fetchMyProfile();
+
+        if (!nextProfile) {
+          await signOutUser();
+          if (!cancelled) setAuthError("Tu usuario no tiene un perfil asignado. Pide a un administrador que lo cree.");
+          return;
+        }
+
+        if (!nextProfile.isActive) {
+          await signOutUser();
+          if (!cancelled) setAuthError("Tu usuario está desactivado.");
+          return;
+        }
+
+        if (cancelled) return;
+
+        setProfile(nextProfile);
+
+        if (nextProfile.role === "client") {
+          setQuotes([]);
+          setClients([]);
+          setIssuer(DEF_ISS);
+          setProfiles([]);
+          setView((prev) => prev === "admin" ? "list" : prev);
+          return;
+        }
+
+        const tasks = [fetchQuotes(), fetchClients(), fetchIssuer()];
+        if (nextProfile.role === "admin") tasks.push(fetchProfiles());
+        const [qs, cs, iss, allProfiles] = await Promise.all(tasks);
+
+        if (cancelled) return;
+
+        setQuotes(qs);
+        setClients(cs);
+        setIssuer(iss);
+        setProfiles(allProfiles ?? []);
+
+        if (nextProfile.role !== "admin") {
+          setView((prev) => prev === "admin" ? "list" : prev);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error(err);
+        setAuthError(err.message || "No se pudo cargar la información de la cuenta.");
+        notify("Error al cargar: " + (err.message || "desconocido"), "err");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadAuthenticatedState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, session, refreshKey]);
 
   const totals = (items) => calcTotals(items);
 
+  const handleLogin = async ({ email, password }) => {
+    setAuthError(null);
+    await signInUser(email, password);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOutUser();
+      setAuthError(null);
+    } catch {
+      notify("No se pudo cerrar la sesión.", "err");
+    }
+  };
+
   const newQ = async () => {
+    if (!profile) return;
     try {
       setSaving(true);
       const nextNumber = await getNextNumber();
-      setCur({ ...mkQuote(issuer), number: nextNumber });
+      setCur({ ...mkQuote(issuer, profile.id), number: nextNumber });
       setView("editor");
     } catch (err) {
       console.error("No se pudo obtener el siguiente número de cotización", err);
       notify("No se pudo obtener el siguiente número. Puedes seguir y se asignará al guardar.", "info");
-      setCur(mkQuote(issuer));
+      setCur(mkQuote(issuer, profile.id));
       setView("editor");
     } finally { setSaving(false); }
   };
@@ -324,7 +453,7 @@ export default function App() {
       setSaving(true);
       const full = q.items?.length > 0 ? q : await fetchQuote(q.id);
       setCur({ ...full }); setView("editor");
-    } catch (err) { notify("Error al cargar", "err"); }
+    } catch { notify("Error al cargar", "err"); }
     finally { setSaving(false); }
   };
 
@@ -333,20 +462,22 @@ export default function App() {
       setSaving(true);
       const full = (q.number === null || q.items?.length > 0) ? q : await fetchQuote(q.id);
       setCur({ ...full }); setView("preview");
-    } catch (err) { notify("Error al cargar", "err"); }
+    } catch { notify("Error al cargar", "err"); }
     finally { setSaving(false); }
   };
 
   const saveQ = async (q) => {
+    if (!profile) return;
     try {
       setSaving(true);
-      const isNew = !quotes.some((x) => x.id === q.id);
-      const saved = await dbSave(q, isNew);
+      const nextQuote = { ...q, userId: q.userId ?? profile.id };
+      const isNew = !quotes.some((x) => x.id === nextQuote.id);
+      const saved = await dbSave(nextQuote, isNew);
       setQuotes(prev => {
         const idx = prev.findIndex(x => x.id === saved.id);
-        const nextQuote = withQuoteSummary({ ...saved, items: q.items });
-        if (idx >= 0) { const n = [...prev]; n[idx] = nextQuote; return n; }
-        return [nextQuote, ...prev];
+        const nextSavedQuote = withQuoteSummary({ ...saved, items: nextQuote.items });
+        if (idx >= 0) { const n = [...prev]; n[idx] = nextSavedQuote; return n; }
+        return [nextSavedQuote, ...prev];
       });
       try {
         const cs = await fetchClients();
@@ -378,7 +509,7 @@ export default function App() {
       await dbDelete(id);
       setQuotes(prev => prev.filter(q => q.id !== id));
       notify("Eliminada", "info");
-    } catch (err) { notify("Error al eliminar", "err"); }
+    } catch { notify("Error al eliminar", "err"); }
     finally { setSaving(false); }
   };
 
@@ -389,7 +520,7 @@ export default function App() {
       const dup = await dbDuplicate(full);
       setQuotes(prev => [dup, ...prev]);
       notify("Duplicada ✓");
-    } catch (err) { notify("Error al duplicar", "err"); }
+    } catch { notify("Error al duplicar", "err"); }
     finally { setSaving(false); }
   };
 
@@ -400,19 +531,20 @@ export default function App() {
       setIssuer(data);
       notify("Ajustes guardados ✓");
       setView("list");
-    } catch (err) { notify("Error al guardar ajustes", "err"); }
+    } catch { notify("Error al guardar ajustes", "err"); }
     finally { setSaving(false); }
   };
 
   const delClient = async (id) => {
     try { await deleteClient(id); setClients(prev => prev.filter(c => c.id !== id)); }
-    catch (err) { notify("Error al eliminar cliente", "err"); }
+    catch { notify("Error al eliminar cliente", "err"); }
   };
 
   const saveClientData = async (client) => {
+    if (!profile) throw new Error("No hay una sesión activa.");
     try {
-      const id = await dbSaveClient(client);
-      const updated = { ...client, id };
+      const id = await dbSaveClient({ ...client, userId: client.userId ?? profile.id });
+      const updated = { ...client, id, userId: client.userId ?? profile.id };
       setClients(prev => {
         if (client.id) return prev.map(c => c.id === client.id ? updated : c);
         return [updated, ...prev];
@@ -421,6 +553,80 @@ export default function App() {
       return id;
     } catch (err) { notify("Error al guardar cliente: " + err.message, "err"); throw err; }
   };
+
+  const handleCreateUser = async (data) => {
+    try {
+      setSaving(true);
+      const created = await createManagedUser(data);
+      setProfiles((prev) => [created, ...prev]);
+      notify("Usuario creado ✓");
+      return created;
+    } catch (err) {
+      notify("Error al crear usuario: " + err.message, "err");
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdateUser = async (id, updates) => {
+    try {
+      setSaving(true);
+      const updated = await updateProfile(id, updates);
+      setProfiles((prev) => prev.map((entry) => (entry.id === id ? updated : entry)));
+
+      if (profile?.id === id) {
+        setProfile(updated);
+
+        if (!updated.isActive) {
+          await signOutUser();
+          setAuthError("Tu usuario fue desactivado.");
+          return updated;
+        }
+
+        if (updated.role !== "admin" && view === "admin") {
+          setView("list");
+        }
+      }
+
+      notify("Usuario actualizado ✓");
+      return updated;
+    } catch (err) {
+      notify("Error al actualizar usuario: " + err.message, "err");
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!authReady || (session && !profile && loading)) return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: F, background: "#f5f5f5" }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ width: 40, height: 40, border: "3px solid #ddd", borderTopColor: "#000", borderRadius: "50%", animation: "spin .8s linear infinite", margin: "0 auto 16px" }} />
+        <p style={{ fontSize: 14, color: C.gray, fontWeight: 500 }}>Verificando sesión…</p>
+      </div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+
+  if (!session) {
+    return <LoginView onSubmit={handleLogin} error={authError} />;
+  }
+
+  if (!profile) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, background: "#f5f5f5", fontFamily: F }}>
+        <Sec style={{ maxWidth: 480, width: "100%" }}>
+          <p style={{ fontSize: 11, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 10 }}>Acceso bloqueado</p>
+          <h2 style={{ fontSize: 24, color: C.black, marginBottom: 10 }}>No se pudo cargar tu perfil</h2>
+          <p style={{ fontSize: 14, color: C.gray, lineHeight: 1.6, marginBottom: 18 }}>
+            {authError || "La cuenta existe en Auth, pero no tiene permisos configurados en profiles."}
+          </p>
+          <Btn s onClick={handleLogout}>Cerrar sesión</Btn>
+        </Sec>
+      </div>
+    );
+  }
 
   if (loading) return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: F, background: "#f5f5f5" }}>
@@ -432,8 +638,31 @@ export default function App() {
     </div>
   );
 
+  if (profile.role === "client") {
+    return (
+      <div style={{ minHeight: "100vh", padding: 24, background: "#f1f1f1", fontFamily: F }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+            <div>
+              <p style={{ fontSize: 11, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px" }}>Sesión activa</p>
+              <h1 style={{ fontSize: 24, color: C.black, marginTop: 4 }}>{profile.fullName || profile.email}</h1>
+            </div>
+            <Btn onClick={handleLogout}>Cerrar sesión</Btn>
+          </div>
+          <Sec>
+            <p style={{ fontSize: 11, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 10 }}>Portal cliente</p>
+            <h2 style={{ fontSize: 22, color: C.black, marginBottom: 10 }}>Acceso de solo lectura en preparación</h2>
+            <p style={{ fontSize: 14, color: C.gray, lineHeight: 1.7 }}>
+              Tu cuenta ya está identificada como cliente, pero esta vista todavía no expone cotizaciones en modo lectura. La infraestructura de sesión y roles ya quedó lista para incorporarla después.
+            </p>
+          </Sec>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ minHeight: "100vh", background: "#e8e8e8", fontFamily: F, position: "relative" }}>
+    <div style={{ minHeight: "100vh", background: "#e8e8e8", fontFamily: F, position: "relative", paddingTop: 72 }}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         input,textarea,select,button{font-family:${F}}
@@ -448,12 +677,38 @@ export default function App() {
 
       {saving && <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: 3, background: "#000", animation: "progress 1.2s ease infinite", zIndex: 9999 }} />}
 
+      <div style={{ position: "fixed", top: 14, right: 14, left: 14, zIndex: 9998, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+        <div style={{ pointerEvents: "auto", width: "min(1120px, 100%)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 14px", borderRadius: 14, background: "rgba(255,255,255,.9)", border: "1px solid rgba(0,0,0,.08)", boxShadow: "0 12px 32px rgba(0,0,0,.08)", backdropFilter: "blur(14px)" }}>
+          <div>
+            <div style={{ fontSize: 11, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px" }}>{profile.role === "admin" ? "Administrador" : "Usuario"}</div>
+            <div style={{ fontSize: 14, color: C.black, fontWeight: 700 }}>{profile.fullName || profile.email}</div>
+            <div style={{ fontSize: 12, color: C.gray }}>{profile.email}</div>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {profile.role === "admin" && (
+              <Btn g onClick={() => setView((prev) => prev === "admin" ? "list" : "admin")}>
+                {view === "admin" ? "Volver a la app" : "Usuarios"}
+              </Btn>
+            )}
+            <Btn g onClick={refreshApp}>Recargar</Btn>
+            <Btn g onClick={handleLogout}>Cerrar sesión</Btn>
+          </div>
+        </div>
+      </div>
+
       {toast && (
         <div style={{ position: "fixed", top: 16, right: 16, zIndex: 9999, background: toast.t === "ok" ? "#000" : toast.t === "err" ? "#dc2626" : "#555", color: "#fff", padding: "9px 18px", borderRadius: 5, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,.2)", animation: "fd .2s ease" }}>
           {toast.msg}
         </div>
       )}
 
+      {authError && (
+        <div style={{ position: "fixed", top: 84, left: "50%", transform: "translateX(-50%)", zIndex: 9997, background: "#fef2f2", color: "#b91c1c", border: "1px solid #fecaca", padding: "10px 14px", borderRadius: 10, fontSize: 13, fontWeight: 500, boxShadow: "0 8px 24px rgba(0,0,0,.08)" }}>
+          {authError}
+        </div>
+      )}
+
+      {view === "admin" && profile.role === "admin" && <AdminView profiles={profiles} currentUserId={profile.id} onBack={() => setView("list")} onCreateUser={handleCreateUser} onUpdateUser={handleUpdateUser} />}
       {view === "list" && <ListView quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} responsive={responsive} />}
       {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => setView("list")} onPreview={q => { setCur(q); setView("preview") }} totals={totals} clients={clients} issuer={issuer} responsive={responsive} />}
       {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => setView("list")} totals={totals} issuer={issuer} onExport={(q, iss) => generatePDF(q, iss)} responsive={responsive} />}
@@ -1025,5 +1280,5 @@ const TDS = { padding: "10px 8px 10px 0", fontSize: 10, color: C.black, vertical
 function Sec({ t, children, style }) { return <div style={{ background: C.white, border: "1px solid #ddd", borderRadius: 4, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.05)", ...style }}>{t && <p style={{ fontSize: 11, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 14 }}>{t}</p>}{children}</div> }
 function F2({ l, children }) { return <div style={{ marginBottom: 10 }}><label style={{ display: "block", fontSize: 11, color: C.gray, fontWeight: 600, marginBottom: 4, letterSpacing: ".3px" }}>{l}</label>{children}</div> }
 function TR({ l, v, b }) { return <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: b ? 14 : 12, fontWeight: b ? 700 : 400, color: b ? C.black : C.gray }}><span>{l}</span><span>{v}</span></div> }
-function Btn({ children, onClick, s, g, style, disabled }) { return <button onClick={onClick} disabled={disabled} style={{ padding: "8px 18px", borderRadius: 5, fontSize: 13, fontWeight: 600, border: `1.5px solid ${s ? "#000" : "#ccc"}`, background: s ? "#000" : "#fff", color: s ? "#fff" : "#555", fontFamily: F, transition: "opacity .12s", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? .55 : 1, ...style }} onMouseEnter={e => { if (!disabled) e.currentTarget.style.opacity = ".75" }} onMouseLeave={e => { e.currentTarget.style.opacity = disabled ? ".55" : "1" }}>{children}</button> }
+function Btn({ children, onClick, s, style, disabled }) { return <button onClick={onClick} disabled={disabled} style={{ padding: "8px 18px", borderRadius: 5, fontSize: 13, fontWeight: 600, border: `1.5px solid ${s ? "#000" : "#ccc"}`, background: s ? "#000" : "#fff", color: s ? "#fff" : "#555", fontFamily: F, transition: "opacity .12s", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? .55 : 1, ...style }} onMouseEnter={e => { if (!disabled) e.currentTarget.style.opacity = ".75" }} onMouseLeave={e => { e.currentTarget.style.opacity = disabled ? ".55" : "1" }}>{children}</button> }
 function IB({ children, onClick, title, d }) { return <button onClick={onClick} title={title} style={{ width: 30, height: 30, borderRadius: 5, border: "1px solid #ddd", background: "#fff", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", transition: "all .12s" }} onMouseEnter={e => { e.currentTarget.style.borderColor = d ? "#dc2626" : "#000"; e.currentTarget.style.background = d ? "#fef2f2" : "#f5f5f5" }} onMouseLeave={e => { e.currentTarget.style.borderColor = "#ddd"; e.currentTarget.style.background = "#fff" }}>{children}</button> }

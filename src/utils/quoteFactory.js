@@ -22,8 +22,9 @@ export const DEF_ISS = {
     logoDataUrl: null,
 };
 
-export const mkQuote = (iss) => ({
+export const mkQuote = (iss, userId = null) => ({
     id: crypto.randomUUID(),
+    userId,
     number: null,
     status: "draft",
     issueDate: today(),
