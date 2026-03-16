@@ -24,7 +24,7 @@ function fmtDate(value) {
     });
 }
 
-export default function AdminView({ profiles, currentUserId, onBack, onCreateUser, onUpdateUser }) {
+export default function AdminView({ profiles, currentUserId, onBack, onCreateUser, onUpdateUser, onResendVerification }) {
     const [showCreate, setShowCreate] = useState(false);
     const [form, setForm] = useState(EMPTY_FORM);
     const [savingCreate, setSavingCreate] = useState(false);
@@ -68,6 +68,18 @@ export default function AdminView({ profiles, currentUserId, onBack, onCreateUse
         setSavingId(profile.id);
         try {
             await onUpdateUser(profile.id, { isActive: !profile.isActive });
+        } finally {
+            setSavingId(null);
+        }
+    };
+
+    const handleResendVerification = async (profile) => {
+        setSavingId(profile.id);
+        setError("");
+        try {
+            await onResendVerification(profile.email);
+        } catch (resendError) {
+            setError(resendError.message || "No se pudo reenviar la verificación.");
         } finally {
             setSavingId(null);
         }
@@ -142,7 +154,7 @@ export default function AdminView({ profiles, currentUserId, onBack, onCreateUse
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                         <tr style={{ background: C.bgTop, borderBottom: "2px solid #ccc" }}>
-                            {["Usuario", "Email", "Rol", "Estado", "Creado", ""].map((header) => (
+                            {["Usuario", "Email", "Rol", "Estado", "Creado", "", ""].map((header) => (
                                 <th
                                     key={header}
                                     style={{ padding: "11px 14px", textAlign: "left", fontSize: 10, color: C.gray, fontWeight: 700, letterSpacing: ".8px", textTransform: "uppercase" }}
@@ -196,6 +208,15 @@ export default function AdminView({ profiles, currentUserId, onBack, onCreateUse
                                         </span>
                                     </td>
                                     <td style={{ padding: "14px", fontSize: 13, color: C.gray }}>{fmtDate(profile.createdAt)}</td>
+                                    <td style={{ padding: "14px", textAlign: "right" }}>
+                                        <Btn
+                                            onClick={() => handleResendVerification(profile)}
+                                            disabled={rowBusy || !profile.email}
+                                            style={{ minWidth: 170 }}
+                                        >
+                                            Reenviar verificación
+                                        </Btn>
+                                    </td>
                                     <td style={{ padding: "14px", textAlign: "right" }}>
                                         <Btn
                                             onClick={() => handleToggleActive(profile)}

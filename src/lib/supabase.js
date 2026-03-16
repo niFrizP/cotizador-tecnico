@@ -18,6 +18,28 @@ const DEFAULT_ISSUER = {
 
 export const supabase = createClient(supabaseUrl, supabaseKey)
 
+function getAuthRedirectUrl() {
+  const configuredRedirect = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim()
+  if (configuredRedirect) return configuredRedirect
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin
+  }
+
+  return undefined
+}
+
+function normalizeAuthEmailError(error, actionLabel) {
+  const message = error?.message ?? 'Error desconocido'
+  const isRateLimit = error?.status === 429 || message.includes('over_email_send_rate_limit') || message.includes('email rate limit exceeded')
+
+  if (isRateLimit) {
+    return new Error(`Límite de correos alcanzado para ${actionLabel}. Espera unos minutos e inténtalo nuevamente.`)
+  }
+
+  return new Error(`No se pudo ${actionLabel}: ${message}`)
+}
+
 function createEphemeralAuthClient() {
   return createClient(supabaseUrl, supabaseKey, {
     auth: {
@@ -124,6 +146,47 @@ export async function signIn(email, password) {
   return data
 }
 
+export async function resendSignupVerification(email) {
+  const redirectTo = getAuthRedirectUrl()
+  const { error } = await supabase.auth.resend({
+    type: 'signup',
+    email,
+    options: {
+      ...(redirectTo ? { emailRedirectTo: redirectTo } : {}),
+    },
+  })
+
+  if (error) throw normalizeAuthEmailError(error, 'reenviar la verificación')
+
+  return { ok: true }
+}
+
+export async function sendPasswordRecovery(email) {
+  const redirectTo = getAuthRedirectUrl()
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    ...(redirectTo ? { redirectTo } : {}),
+  })
+
+  if (error) throw normalizeAuthEmailError(error, 'enviar el correo de recuperación')
+
+  return { ok: true }
+}
+
+export async function sendMagicLink(email) {
+  const redirectTo = getAuthRedirectUrl()
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: false,
+      ...(redirectTo ? { emailRedirectTo: redirectTo } : {}),
+    },
+  })
+
+  if (error) throw normalizeAuthEmailError(error, 'enviar el magic link')
+
+  return { ok: true }
+}
+
 export async function signOut() {
   const { error } = await supabase.auth.signOut()
   if (error) throw error
@@ -182,6 +245,7 @@ export async function updateProfile(id, updates) {
 }
 
 export async function createManagedUser({ email, password, fullName, role }) {
+  const redirectTo = getAuthRedirectUrl()
   const ephemeralClient = createEphemeralAuthClient()
   const { data: signUpData, error: signUpError } = await ephemeralClient.auth.signUp({
     email,
@@ -190,6 +254,7 @@ export async function createManagedUser({ email, password, fullName, role }) {
       data: {
         full_name: fullName ?? '',
       },
+      ...(redirectTo ? { emailRedirectTo: redirectTo } : {}),
     },
   })
 

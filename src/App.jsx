@@ -6,6 +6,9 @@ import {
   duplicateQuote as dbDuplicate, saveIssuer as dbSaveIssuer,
   saveClient as dbSaveClient, deleteClient,
   signIn as signInUser, signOut as signOutUser,
+  resendSignupVerification,
+  sendPasswordRecovery,
+  sendMagicLink,
   getSession, onAuthStateChange,
   fetchMyProfile, fetchProfiles,
   createManagedUser, updateProfile,
@@ -433,6 +436,30 @@ export default function App() {
     }
   };
 
+  const handleResendVerification = async (email) => {
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) throw new Error("Ingresa un email válido.");
+
+    await resendSignupVerification(normalizedEmail);
+    notify("Se reenvió el correo de verificación ✓", "ok");
+  };
+
+  const handleRecoverPassword = async (email) => {
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) throw new Error("Ingresa un email válido.");
+
+    await sendPasswordRecovery(normalizedEmail);
+    notify("Correo de recuperación enviado ✓", "ok");
+  };
+
+  const handleSendMagicLink = async (email) => {
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) throw new Error("Ingresa un email válido.");
+
+    await sendMagicLink(normalizedEmail);
+    notify("Magic link enviado ✓", "ok");
+  };
+
   const newQ = async () => {
     if (!profile) return;
     try {
@@ -610,7 +637,15 @@ export default function App() {
   );
 
   if (!session) {
-    return <LoginView onSubmit={handleLogin} error={authError} />;
+    return (
+      <LoginView
+        onSubmit={handleLogin}
+        onRecoverPassword={handleRecoverPassword}
+        onSendMagicLink={handleSendMagicLink}
+        onResendVerification={handleResendVerification}
+        error={authError}
+      />
+    );
   }
 
   if (!profile) {
@@ -708,7 +743,16 @@ export default function App() {
         </div>
       )}
 
-      {view === "admin" && profile.role === "admin" && <AdminView profiles={profiles} currentUserId={profile.id} onBack={() => setView("list")} onCreateUser={handleCreateUser} onUpdateUser={handleUpdateUser} />}
+      {view === "admin" && profile.role === "admin" && (
+        <AdminView
+          profiles={profiles}
+          currentUserId={profile.id}
+          onBack={() => setView("list")}
+          onCreateUser={handleCreateUser}
+          onUpdateUser={handleUpdateUser}
+          onResendVerification={handleResendVerification}
+        />
+      )}
       {view === "list" && <ListView quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} responsive={responsive} />}
       {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => setView("list")} onPreview={q => { setCur(q); setView("preview") }} totals={totals} clients={clients} issuer={issuer} responsive={responsive} />}
       {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => setView("list")} totals={totals} issuer={issuer} onExport={(q, iss) => generatePDF(q, iss)} responsive={responsive} />}
