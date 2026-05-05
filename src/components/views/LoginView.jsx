@@ -97,32 +97,37 @@ export default function LoginView({
 
                 <Sec>
                     <form onSubmit={handleSubmit}>
-                        <F2 l="Email">
-                            <input
-                                type="email"
-                                value={email}
-                                onChange={(event) => setEmail(event.target.value)}
-                                autoComplete="email"
-                                placeholder="tu@empresa.com"
-                                style={IS}
-                                required
-                            />
-                        </F2>
-                        <F2 l="Contraseña">
-                            <input
-                                type="password"
-                                value={password}
-                                onChange={(event) => setPassword(event.target.value)}
-                                autoComplete="current-password"
-                                placeholder="••••••••"
-                                style={IS}
-                                required
-                            />
-                        </F2>
+                        <div style={{ width: "100%", maxWidth: 360, margin: "0 auto" }}>
+                            <F2 l="Email">
+                                <input
+                                    type="email"
+                                    value={email}
+                                    onChange={(event) => setEmail(event.target.value)}
+                                    autoComplete="email"
+                                    placeholder="juanperez@correo.cl"
+                                    style={IS}
+                                    required
+                                />
+                            </F2>
+                            <F2 l="Contraseña">
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(event) => setPassword(event.target.value)}
+                                    autoComplete="current-password"
+                                    placeholder="••••••••"
+                                    style={IS}
+                                    required
+                                />
+                            </F2>
+                        </div>
 
                         {(error || localError) && (
                             <div
                                 style={{
+                                    maxWidth: 360,
+                                    marginLeft: "auto",
+                                    marginRight: "auto",
                                     marginTop: 14,
                                     marginBottom: 4,
                                     padding: "10px 12px",
@@ -138,9 +143,30 @@ export default function LoginView({
                             </div>
                         )}
 
-                        <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-                            <Btn s disabled={submitting || !email.trim() || !password} style={{ minWidth: 160 }}>
+                        <div style={{ width: "100%", maxWidth: 360, margin: "18px auto 0", display: "grid", gap: 10 }}>
+                            <Btn
+                                type="submit"
+                                s
+                                disabled={submitting || !email.trim() || !password}
+                                style={{ width: "100%", minHeight: 42, display: "flex", justifyContent: "center" }}
+                            >
                                 {submitting ? "Ingresando..." : "Iniciar sesión"}
+                            </Btn>
+
+                            <Btn
+                                type="button"
+                                style={{
+                                    width: "100%",
+                                    minHeight: 40,
+                                    display: "flex",
+                                    justifyContent: "center",
+                                    border: "1.5px solid #d1d5db",
+                                    color: C.black,
+                                }}
+                                onClick={() => withEmailAction("recover", "Correo de recuperación", onRecoverPassword)}
+                                disabled={submitting || emailActionLoading !== "" || !email.trim() || recoverLeft > 0}
+                            >
+                                {recoverLeft > 0 ? `Recuperar (${recoverLeft}s)` : "Recuperar contraseña"}
                             </Btn>
                         </div>
 
@@ -148,20 +174,16 @@ export default function LoginView({
                             <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".8px", textTransform: "uppercase", color: C.gray, marginBottom: 10 }}>
                                 Acciones de acceso por email
                             </p>
-                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
                                 <Btn
-                                    onClick={() => withEmailAction("recover", "Correo de recuperación", onRecoverPassword)}
-                                    disabled={submitting || emailActionLoading !== "" || !email.trim() || recoverLeft > 0}
-                                >
-                                    {recoverLeft > 0 ? `Recuperar (${recoverLeft}s)` : "Recuperar contraseña"}
-                                </Btn>
-                                <Btn
+                                    type="button"
                                     onClick={() => withEmailAction("magic", "Magic link", onSendMagicLink)}
                                     disabled={submitting || emailActionLoading !== "" || !email.trim() || magicLeft > 0}
                                 >
                                     {magicLeft > 0 ? `Magic link (${magicLeft}s)` : "Enviar magic link"}
                                 </Btn>
                                 <Btn
+                                    type="button"
                                     onClick={() => withEmailAction("verify", "Verificación", onResendVerification)}
                                     disabled={submitting || emailActionLoading !== "" || !email.trim() || verifyLeft > 0}
                                 >

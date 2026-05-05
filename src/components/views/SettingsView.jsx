@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Btn, F2, Sec } from "../common/Atoms";
 import { C, IS } from "../../constants/ui";
 
 export default function SettingsView({ issuer: init, clients, onSave, onDelClient, onBack }) {
     const [f, setF] = useState(init);
     const s = (k, v) => setF((p) => ({ ...p, [k]: v }));
+    const DRAFT_KEY = "cotizador-tecnico.settings-draft.v1";
 
     const handleLogo = (e) => {
         const fl = e.target.files[0];
@@ -12,6 +13,33 @@ export default function SettingsView({ issuer: init, clients, onSave, onDelClien
         const r = new FileReader();
         r.onload = (ev) => s("logoDataUrl", ev.target.result);
         r.readAsDataURL(fl);
+    };
+
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(DRAFT_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed) setF((prev) => ({ ...prev, ...parsed }));
+        } catch {
+            window.localStorage.removeItem(DRAFT_KEY);
+        }
+    }, []);
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(DRAFT_KEY, JSON.stringify(f));
+        } catch {
+            // Si storage no está disponible, el formulario sigue funcionando en memoria.
+        }
+    }, [f]);
+
+    const clearDraft = () => {
+        try {
+            window.localStorage.removeItem(DRAFT_KEY);
+        } catch {
+            // Ignorar errores de storage.
+        }
     };
 
     return (
@@ -122,7 +150,7 @@ export default function SettingsView({ issuer: init, clients, onSave, onDelClien
                     ))}
                 </div>
                 <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
-                    <Btn s onClick={() => onSave(f)}>
+                    <Btn s onClick={() => { onSave(f); clearDraft(); }}>
                         Guardar ajustes
                     </Btn>
                 </div>

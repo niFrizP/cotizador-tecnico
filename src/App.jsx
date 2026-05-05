@@ -301,6 +301,7 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [draftDirty, setDraftDirty] = useState(false);
   const responsive = useResponsiveLayout();
 
   const notify = (msg, t = "ok") => { setToast({ msg, t }); setTimeout(() => setToast(null), 2800) };
@@ -313,6 +314,7 @@ export default function App() {
     setClients([]);
     setIssuer(DEF_ISS);
     setCur(null);
+    setDraftDirty(false);
     setView("list");
   };
 
@@ -334,8 +336,9 @@ export default function App() {
 
     initAuth();
 
-    const { data: { subscription } } = onAuthStateChange((nextSession) => {
+    const { data: { subscription } } = onAuthStateChange((event, nextSession) => {
       if (!active) return;
+      if (event === "TOKEN_REFRESHED") return;
       setSession(nextSession);
       setAuthReady(true);
     });
@@ -399,6 +402,7 @@ export default function App() {
         setClients(cs);
         setIssuer(iss);
         setProfiles(allProfiles ?? []);
+        setDraftDirty(false);
 
         if (nextProfile.role !== "admin") {
           setView((prev) => prev === "admin" ? "list" : prev);
@@ -466,11 +470,13 @@ export default function App() {
       setSaving(true);
       const nextNumber = await getNextNumber();
       setCur({ ...mkQuote(issuer, profile.id), number: nextNumber });
+      setDraftDirty(true);
       setView("editor");
     } catch (err) {
       console.error("No se pudo obtener el siguiente número de cotización", err);
       notify("No se pudo obtener el siguiente número. Puedes seguir y se asignará al guardar.", "info");
       setCur(mkQuote(issuer, profile.id));
+      setDraftDirty(true);
       setView("editor");
     } finally { setSaving(false); }
   };
@@ -480,6 +486,7 @@ export default function App() {
       setSaving(true);
       const full = q.items?.length > 0 ? q : await fetchQuote(q.id);
       setCur({ ...full }); setView("editor");
+      setDraftDirty(false);
     } catch { notify("Error al cargar", "err"); }
     finally { setSaving(false); }
   };
@@ -489,6 +496,7 @@ export default function App() {
       setSaving(true);
       const full = (q.number === null || q.items?.length > 0) ? q : await fetchQuote(q.id);
       setCur({ ...full }); setView("preview");
+      setDraftDirty(false);
     } catch { notify("Error al cargar", "err"); }
     finally { setSaving(false); }
   };
@@ -506,6 +514,7 @@ export default function App() {
         if (idx >= 0) { const n = [...prev]; n[idx] = nextSavedQuote; return n; }
         return [nextSavedQuote, ...prev];
       });
+      setDraftDirty(false);
       try {
         const cs = await fetchClients();
         setClients(cs);
@@ -557,6 +566,7 @@ export default function App() {
       await dbSaveIssuer(data);
       setIssuer(data);
       notify("Ajustes guardados ✓");
+      setDraftDirty(false);
       setView("list");
     } catch { notify("Error al guardar ajustes", "err"); }
     finally { setSaving(false); }
@@ -577,6 +587,7 @@ export default function App() {
         return [updated, ...prev];
       });
       notify(client.id ? "Cliente actualizado ✓" : "Cliente creado ✓");
+      setDraftDirty(false);
       return id;
     } catch (err) { notify("Error al guardar cliente: " + err.message, "err"); throw err; }
   };
@@ -587,6 +598,7 @@ export default function App() {
       const created = await createManagedUser(data);
       setProfiles((prev) => [created, ...prev]);
       notify("Usuario creado ✓");
+      setDraftDirty(false);
       return created;
     } catch (err) {
       notify("Error al crear usuario: " + err.message, "err");
@@ -617,6 +629,7 @@ export default function App() {
       }
 
       notify("Usuario actualizado ✓");
+      setDraftDirty(false);
       return updated;
     } catch (err) {
       notify("Error al actualizar usuario: " + err.message, "err");
@@ -663,15 +676,7 @@ export default function App() {
     );
   }
 
-  if (loading) return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: F, background: "#f5f5f5" }}>
-      <div style={{ textAlign: "center" }}>
-        <div style={{ width: 40, height: 40, border: "3px solid #ddd", borderTopColor: "#000", borderRadius: "50%", animation: "spin .8s linear infinite", margin: "0 auto 16px" }} />
-        <p style={{ fontSize: 14, color: C.gray, fontWeight: 500 }}>Cargando cotizaciones…</p>
-      </div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
-  );
+  const showLoadingOverlay = loading && !!session && !!profile;
 
   if (profile.role === "client") {
     return (
@@ -706,9 +711,22 @@ export default function App() {
         @keyframes fd{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
         @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes progress{0%{width:0;opacity:1}80%{width:100%;opacity:1}100%{width:100%;opacity:0}}
+        @keyframes pulseGlow{0%,100%{opacity:.7;transform:scale(1)}50%{opacity:1;transform:scale(1.05)}}
         input:focus,textarea:focus,select:focus{outline:2px solid #000;outline-offset:1px;border-color:#000!important}
         @media print{body>*{display:none!important}#PDFDOC{display:block!important;position:fixed;inset:0;background:white;overflow:auto;z-index:99999}.NOPRINT{display:none!important}}
       `}</style>
+
+      {showLoadingOverlay && (
+        <div style={{ position: "fixed", top: 96, right: 18, zIndex: 10000, pointerEvents: "none" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 14, background: "rgba(0,0,0,.88)", color: "#fff", boxShadow: "0 12px 30px rgba(0,0,0,.25)", border: "1px solid rgba(255,255,255,.12)", backdropFilter: "blur(10px)" }}>
+            <div style={{ width: 22, height: 22, borderRadius: "50%", border: "2.5px solid rgba(255,255,255,.28)", borderTopColor: "#fff", animation: "spin .75s linear infinite" }} />
+            <div style={{ lineHeight: 1.15 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: ".4px" }}>Sincronizando datos</div>
+              <div style={{ fontSize: 11, opacity: .82 }}>Actualizando cotizaciones y clientes…</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {saving && <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: 3, background: "#000", animation: "progress 1.2s ease infinite", zIndex: 9999 }} />}
 
@@ -754,8 +772,8 @@ export default function App() {
         />
       )}
       {view === "list" && <ListView quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} responsive={responsive} />}
-      {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => setView("list")} onPreview={q => { setCur(q); setView("preview") }} totals={totals} clients={clients} issuer={issuer} responsive={responsive} />}
-      {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => setView("list")} totals={totals} issuer={issuer} onExport={(q, iss) => generatePDF(q, iss)} responsive={responsive} />}
+      {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => setView("list")} onPreview={q => { setCur(q); setDraftDirty(true); setView("preview") }} onDraftChange={(next) => { setCur(next); setDraftDirty(true); }} totals={totals} clients={clients} issuer={issuer} responsive={responsive} />}
+      {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => setView(draftDirty || !cur?.id ? "editor" : "list")} totals={totals} issuer={issuer} onExport={(q, iss) => generatePDF(q, iss)} responsive={responsive} />}
       {view === "settings" && <SettingsView issuer={issuer} clients={clients} onSave={saveIssuerData} onDelClient={delClient} onBack={() => setView("list")} responsive={responsive} />}
       {view === "clients" && <ClientsView clients={clients} onSave={saveClientData} onDelete={delClient} onBack={() => setView("list")} responsive={responsive} />}
     </div>
@@ -887,18 +905,24 @@ function ListView({ quotes, onNew, onEdit, onPreview, onDelete, onDup, onSetting
 }
 
 /* ─── EDITOR ────────────────────────────────────────────────────────── */
-function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients, issuer, responsive }) {
+function EditorView({ quote: init, onSave, onCancel, onPreview, onDraftChange, totals, clients, issuer, responsive }) {
   const [q, setQ] = useState(init);
   const [cs, setCs] = useState(init.client?.name || "");
   const [dd, setDd] = useState(false);
   const { isCompact, isNarrow } = responsive;
 
-  const sc = (f, v) => setQ(p => ({ ...p, client: { ...p.client, [f]: v } }));
-  const se = (f, v) => setQ(p => ({ ...p, equipment: { ...p.equipment, [f]: v } }));
-  const si = (f, v) => setQ(p => ({ ...p, issuer: { ...p.issuer, [f]: v } }));
-  const itm = (id, f, v) => setQ(p => ({ ...p, items: p.items.map(i => i.id === id ? { ...i, [f]: v } : i) }));
-  const addI = () => setQ(p => ({ ...p, items: [...p.items, mkItem()] }));
-  const rmI = (id) => setQ(p => ({ ...p, items: p.items.filter(i => i.id !== id) }));
+  const commitQ = (updater) => setQ((prev) => {
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    onDraftChange?.(next);
+    return next;
+  });
+
+  const sc = (f, v) => commitQ(p => ({ ...p, client: { ...p.client, [f]: v } }));
+  const se = (f, v) => commitQ(p => ({ ...p, equipment: { ...p.equipment, [f]: v } }));
+  const si = (f, v) => commitQ(p => ({ ...p, issuer: { ...p.issuer, [f]: v } }));
+  const itm = (id, f, v) => commitQ(p => ({ ...p, items: p.items.map(i => i.id === id ? { ...i, [f]: v } : i) }));
+  const addI = () => commitQ(p => ({ ...p, items: [...p.items, mkItem()] }));
+  const rmI = (id) => commitQ(p => ({ ...p, items: p.items.filter(i => i.id !== id) }));
 
   const { sub, shp, total } = totals(q.items);
   const fltC = clients.filter(c => c.name.toLowerCase().includes(cs.toLowerCase()));
@@ -934,20 +958,20 @@ function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients,
 
       <div style={{ display: "grid", gridTemplateColumns: topGridColumns, gap: 16, marginBottom: 16 }}>
         <Sec t="Estado y fechas">
-          <F2 l="Estado"><select value={q.status} onChange={e => setQ(p => ({ ...p, status: e.target.value }))} style={IS}>{Object.entries(SL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></F2>
-          <F2 l="Fecha de emisión"><input type="date" value={q.issueDate} onChange={e => setQ(p => ({ ...p, issueDate: e.target.value }))} style={IS} /></F2>
-          <F2 l="Válida hasta"><input type="date" value={q.validUntil} onChange={e => setQ(p => ({ ...p, validUntil: e.target.value }))} style={IS} /></F2>
-          <F2 l="Moneda"><select value={q.currency} onChange={e => setQ(p => ({ ...p, currency: e.target.value }))} style={IS}><option value="CLP">CLP – Peso Chileno</option><option value="USD">USD – Dólar</option><option value="UF">UF</option></select></F2>
+          <F2 l="Estado"><select value={q.status} onChange={e => commitQ(p => ({ ...p, status: e.target.value }))} style={IS}>{Object.entries(SL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></F2>
+          <F2 l="Fecha de emisión"><input type="date" value={q.issueDate} onChange={e => commitQ(p => ({ ...p, issueDate: e.target.value }))} style={IS} /></F2>
+          <F2 l="Válida hasta"><input type="date" value={q.validUntil} onChange={e => commitQ(p => ({ ...p, validUntil: e.target.value }))} style={IS} /></F2>
+          <F2 l="Moneda"><select value={q.currency} onChange={e => commitQ(p => ({ ...p, currency: e.target.value }))} style={IS}><option value="CLP">CLP – Peso Chileno</option><option value="USD">USD – Dólar</option><option value="UF">UF</option></select></F2>
         </Sec>
 
         <Sec t="Datos del cliente">
           <F2 l="Nombre / Empresa">
             <div style={{ position: "relative" }}>
-              <input value={cs} onChange={e => { setCs(e.target.value); sc("name", e.target.value); setDd(true) }} onFocus={() => setDd(true)} onBlur={() => setTimeout(() => setDd(false), 180)} placeholder="Buscar o escribir…" style={IS} />
+              <input value={cs} onChange={e => { const nextName = e.target.value; setCs(nextName); sc("name", nextName); setDd(true) }} onFocus={() => setDd(true)} onBlur={() => setTimeout(() => setDd(false), 180)} placeholder="Buscar o escribir…" style={IS} />
               {dd && fltC.length > 0 && (
                 <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #ddd", borderRadius: 6, zIndex: 200, boxShadow: "0 4px 16px rgba(0,0,0,.1)", maxHeight: 150, overflowY: "auto" }}>
                   {fltC.map(c => (
-                    <div key={c.id} onMouseDown={() => { setQ(p => ({ ...p, client: { name: c.name, contact: c.contact || "", website: c.website || "", rut: c.rut || "", phone: c.client_phone || "" } })); setCs(c.name); setDd(false) }} style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid #f4f4f4" }} onMouseEnter={e => e.currentTarget.style.background = "#f8f8f8"} onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                    <div key={c.id} onMouseDown={() => { commitQ(p => ({ ...p, client: { name: c.name, contact: c.contact || "", website: c.website || "", rut: c.rut || "", phone: c.client_phone || "" } })); setCs(c.name); setDd(false) }} style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid #f4f4f4" }} onMouseEnter={e => e.currentTarget.style.background = "#f8f8f8"} onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
                       <strong>{c.name}</strong>{c.contact && <span style={{ color: C.gray, marginLeft: 6, fontWeight: 400 }}>{c.contact}</span>}
                     </div>
                   ))}
@@ -1074,7 +1098,7 @@ function EditorView({ quote: init, onSave, onCancel, onPreview, totals, clients,
       </Sec>
 
       <Sec t="Notas / Condiciones">
-        <textarea value={q.notes} onChange={e => setQ(p => ({ ...p, notes: e.target.value }))} placeholder="Consideraciones, condiciones al pie…" rows={4} style={{ ...IS, width: "100%", resize: "vertical" }} />
+        <textarea value={q.notes} onChange={e => commitQ(p => ({ ...p, notes: e.target.value }))} placeholder="Consideraciones, condiciones al pie…" rows={4} style={{ ...IS, width: "100%", resize: "vertical" }} />
       </Sec>
     </div>
   );

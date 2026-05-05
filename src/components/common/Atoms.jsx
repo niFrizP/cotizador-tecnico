@@ -69,9 +69,10 @@ export function TR({ l, v, b }) {
     );
 }
 
-export function Btn({ children, onClick, s, style, disabled }) {
+export function Btn({ children, onClick, s, style, disabled, type = "button" }) {
     return (
         <button
+            type={type}
             onClick={onClick}
             disabled={disabled}
             style={{

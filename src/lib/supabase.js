@@ -199,7 +199,7 @@ export async function getSession() {
 }
 
 export function onAuthStateChange(callback) {
-  return supabase.auth.onAuthStateChange((_event, session) => callback(session ?? null))
+  return supabase.auth.onAuthStateChange((event, session) => callback(event, session ?? null))
 }
 
 export async function fetchMyProfile() {
@@ -372,13 +372,18 @@ export async function getNextNumber() {
 }
 
 export async function fetchIssuer() {
+  const userId = await getCurrentUserId()
+  if (!userId) return { ...DEFAULT_ISSUER }
+
   const { data, error } = await supabase
     .from('issuer')
     .select('*')
-    .maybeSingle()
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
 
   if (error) throw error
-  return mapIssuer(data)
+  return mapIssuer(data?.[0])
 }
 
 export async function saveIssuer(issuer) {
@@ -421,11 +426,13 @@ export async function upsertClient(client) {
   const { data: existing, error: existingError } = await supabase
     .from('clients')
     .select('id')
+    .eq('user_id', userId)
     .ilike('name', client.name)
-    .maybeSingle()
+    .order('created_at', { ascending: false })
+    .limit(1)
 
   if (existingError) throw existingError
-  if (existing) return existing.id
+  if (existing?.length > 0) return existing[0].id
 
   const { data, error } = await supabase
     .from('clients')

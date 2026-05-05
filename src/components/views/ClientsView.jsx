@@ -5,12 +5,38 @@ import { C, IS } from "../../constants/ui";
 const EMPTY = { name: "", contact: "", rut: "", website: "", client_phone: "" };
 
 export default function ClientsView({ clients, onSave, onDelete, onBack, responsive = { isCompact: false } }) {
+    const DRAFT_KEY = "cotizador-tecnico.clients-draft.v1";
     const [list, setList] = useState(clients);
     const [form, setForm] = useState(EMPTY);
     const [editId, setEditId] = useState(null);   // id del cliente que se está editando
     const [saving, setSaving] = useState(false);
     const [dd, setDd] = useState(false);           // dropdown de sugerencias visible
     const nameRef = useRef(null);
+
+    const loadDraft = () => {
+        try {
+            const raw = window.localStorage.getItem(DRAFT_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed?.form) setForm({ ...EMPTY, ...parsed.form });
+            if (parsed?.editId !== undefined) setEditId(parsed.editId);
+        } catch {
+            window.localStorage.removeItem(DRAFT_KEY);
+        }
+    };
+
+    useEffect(() => {
+        loadDraft();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, editId }));
+        } catch {
+            // Si el navegador bloquea storage, el formulario sigue funcionando en memoria.
+        }
+    }, [form, editId]);
 
     // Mantener la lista local sincronizada con la prop cuando viene del padre
     useEffect(() => { setList(clients); }, [clients]);
@@ -35,6 +61,7 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
     const cancelEdit = () => {
         setEditId(null);
         setForm(EMPTY);
+        window.localStorage.removeItem(DRAFT_KEY);
     };
 
     const handleSave = async () => {
@@ -50,6 +77,7 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
             });
             setEditId(null);
             setForm(EMPTY);
+            window.localStorage.removeItem(DRAFT_KEY);
         } finally {
             setSaving(false);
         }

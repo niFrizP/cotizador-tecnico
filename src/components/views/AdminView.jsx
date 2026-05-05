@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Btn, F2, Sec } from "../common/Atoms";
 import { C, IS } from "../../constants/ui";
 
@@ -25,11 +25,33 @@ function fmtDate(value) {
 }
 
 export default function AdminView({ profiles, currentUserId, onBack, onCreateUser, onUpdateUser, onResendVerification }) {
+    const DRAFT_KEY = "cotizador-tecnico.admin-draft.v1";
     const [showCreate, setShowCreate] = useState(false);
     const [form, setForm] = useState(EMPTY_FORM);
     const [savingCreate, setSavingCreate] = useState(false);
     const [savingId, setSavingId] = useState(null);
     const [error, setError] = useState("");
+
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(DRAFT_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed?.form) setForm((prev) => ({ ...prev, ...parsed.form }));
+            if (typeof parsed?.showCreate === "boolean") setShowCreate(parsed.showCreate);
+            if (typeof parsed?.error === "string") setError(parsed.error);
+        } catch {
+            window.localStorage.removeItem(DRAFT_KEY);
+        }
+    }, []);
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, showCreate, error }));
+        } catch {
+            // Si storage no está disponible, el panel sigue funcionando en memoria.
+        }
+    }, [form, showCreate, error]);
 
     const updateForm = (key, value) => {
         setForm((prev) => ({ ...prev, [key]: value }));
@@ -39,6 +61,11 @@ export default function AdminView({ profiles, currentUserId, onBack, onCreateUse
         setForm(EMPTY_FORM);
         setError("");
         setShowCreate(false);
+        try {
+            window.localStorage.removeItem(DRAFT_KEY);
+        } catch {
+            // Ignorar errores de storage.
+        }
     };
 
     const handleCreate = async () => {
