@@ -27,73 +27,61 @@ pnpm install
 ```env
 VITE_SUPABASE_URL=https://TU-PROYECTO.supabase.co
 VITE_SUPABASE_ANON_KEY=TU_SUPABASE_ANON_KEY
+# Opcional: URL a la que vuelven los correos de recuperacion / acceso
+VITE_AUTH_REDIRECT_URL=https://tu-dominio.cl
 ```
+
+3. Ejecuta las migraciones de `supabase/migrations/` en Supabase → SQL Editor, en orden.
+   - `20261014_fase0_save_quote.sql`: guardado transaccional de cotizaciones (`save_quote`).
+     Si aun no se ejecuta, la app sigue funcionando con el guardado anterior (no transaccional)
+     y muestra un aviso en la consola.
 
 ## Scripts
 
-- Desarrollo:
-
-```bash
-pnpm run dev
-```
-
-- Build de produccion:
-
-```bash
-pnpm run build
-```
-
-- Preview del build:
-
-```bash
-pnpm run preview
-```
-
-- Lint:
-
-```bash
-pnpm run lint
-```
+- Desarrollo: `pnpm run dev`
+- Build de produccion: `pnpm run build`
+- Preview del build: `pnpm run preview`
+- Lint: `pnpm run lint`
 
 ## Estructura del proyecto
 
 ```text
 src/
-	App.jsx
-	components/
-		common/
-			Atoms.jsx
-		views/
-			ListView.jsx
-			EditorView.jsx
-			PreviewView.jsx
-			SettingsView.jsx
-	constants/
-		ui.js
-	utils/
-		format.js
-		quoteFactory.js
-		pdf.js
-	lib/
-		supabase.js
+  App.jsx                    estado global, sesion y navegacion entre pantallas
+  main.jsx                   punto de entrada (importa index.css)
+  index.css                  estilos globales, hover y tamanos tactiles
+  components/
+    common/Atoms.jsx         Sec, F2, TR, Btn, IB
+    views/
+      ListView.jsx           listado de cotizaciones
+      EditorView.jsx         crear / editar cotizacion
+      PreviewView.jsx        vista previa del documento
+      SettingsView.jsx       datos del emisor
+      ClientsView.jsx        clientes
+      AdminView.jsx          usuarios (solo admin)
+      LoginView.jsx          inicio de sesion
+      ResetPasswordView.jsx  nueva contrasena tras el correo de recuperacion
+  constants/ui.js            colores, etiquetas y estilos base
+  hooks/useResponsiveLayout.js
+  lib/supabase.js            acceso a datos
+  utils/
+    format.js                fechas (hora local), montos, escapeHtml, safeUrl
+    pdf.js                   genera el PDF (HTML escapado + impresion)
+    quoteFactory.js          cotizacion / item vacios
+    drafts.js                borradores locales por usuario
+    image.js                 reduce el logo antes de guardarlo
+supabase/migrations/         SQL a ejecutar en Supabase
 ```
-
-## Arquitectura actual
-
-- `src/App.jsx`: concentra la mayor parte de la logica de UI y negocio (estado, vistas y acciones).
-- `src/lib/supabase.js`: capa de acceso a datos (quotes, items, clients, issuer).
-- `src/constants/ui.js`, `src/utils/format.js`, `src/utils/quoteFactory.js`, `src/utils/pdf.js`: modulos auxiliares creados para apoyar una separacion progresiva del codigo.
-- `src/components/common/*` y `src/components/views/*`: estructura de componentes disponible para continuar la migracion desde `App.jsx`.
 
 ## Flujo principal
 
 1. Cargar cotizaciones, clientes y emisor desde Supabase.
 2. Crear o editar una cotizacion desde el editor.
-3. Guardar (crea o actualiza) y refrescar historial de clientes.
-4. Generar PDF automaticamente tras guardar o desde previsualizacion.
+3. Guardar: `save_quote` guarda cotizacion + items en una transaccion y asigna el numero (solo al crear).
+4. Generar PDF tras guardar o desde la vista previa.
 
 ## Notas
 
-- La fuente Barlow se carga desde Google Fonts.
-- El PDF se genera en el navegador y puede ser bloqueado por pop-up blockers.
-- En este workspace, los comandos deben ejecutarse dentro de la carpeta `cotizador-tecnico/` (donde esta `package.json`).
+- La fuente Barlow se carga desde Google Fonts en `index.html`.
+- El PDF se genera en el navegador y puede ser bloqueado por pop-up blockers (la app avisa).
+- Todo texto que entra al PDF se escapa (`escapeHtml`) y los enlaces solo aceptan `http(s)` (`safeUrl`).

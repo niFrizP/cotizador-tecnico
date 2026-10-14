@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Btn, F2, Sec } from "../common/Atoms";
 import { C, F, IS } from "../../constants/ui";
 
@@ -20,13 +20,21 @@ export default function LoginView({
     const [cooldowns, setCooldowns] = useState({ recover: 0, magic: 0, verify: 0 });
     const [localError, setLocalError] = useState("");
 
-    const now = Date.now();
+    // Reloj para las cuentas regresivas: solo corre mientras haya alguna activa.
+    const [now, setNow] = useState(() => Date.now());
+    const anyCooldown = Object.values(cooldowns).some((until) => until > 0);
+    useEffect(() => {
+        if (!anyCooldown) return;
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, [anyCooldown]);
     const recoverLeft = Math.max(0, Math.ceil((cooldowns.recover - now) / 1000));
     const magicLeft = Math.max(0, Math.ceil((cooldowns.magic - now) / 1000));
     const verifyLeft = Math.max(0, Math.ceil((cooldowns.verify - now) / 1000));
 
     const startCooldown = (key) => {
         const nextUntil = Date.now() + EMAIL_ACTION_COOLDOWN_MS;
+        setNow(Date.now());
         setCooldowns((prev) => ({ ...prev, [key]: nextUntil }));
         setTimeout(() => {
             setCooldowns((prev) => ({ ...prev, [key]: 0 }));
@@ -101,6 +109,7 @@ export default function LoginView({
                             <F2 l="Email">
                                 <input
                                     type="email"
+                                    inputMode="email"
                                     value={email}
                                     onChange={(event) => setEmail(event.target.value)}
                                     autoComplete="email"
@@ -172,22 +181,22 @@ export default function LoginView({
 
                         <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid #eee" }}>
                             <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".8px", textTransform: "uppercase", color: C.gray, marginBottom: 10 }}>
-                                Acciones de acceso por email
+                                Otras opciones de acceso
                             </p>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
                                 <Btn
                                     type="button"
-                                    onClick={() => withEmailAction("magic", "Magic link", onSendMagicLink)}
+                                    onClick={() => withEmailAction("magic", "Enlace de acceso", onSendMagicLink)}
                                     disabled={submitting || emailActionLoading !== "" || !email.trim() || magicLeft > 0}
                                 >
-                                    {magicLeft > 0 ? `Magic link (${magicLeft}s)` : "Enviar magic link"}
+                                    {magicLeft > 0 ? `Enlace enviado (${magicLeft}s)` : "Ingresar con enlace al correo"}
                                 </Btn>
                                 <Btn
                                     type="button"
-                                    onClick={() => withEmailAction("verify", "Verificación", onResendVerification)}
+                                    onClick={() => withEmailAction("verify", "Correo de verificación", onResendVerification)}
                                     disabled={submitting || emailActionLoading !== "" || !email.trim() || verifyLeft > 0}
                                 >
-                                    {verifyLeft > 0 ? `Verificar (${verifyLeft}s)` : "Reenviar verificación"}
+                                    {verifyLeft > 0 ? `Reenviado (${verifyLeft}s)` : "Reenviar correo de verificación"}
                                 </Btn>
                             </div>
 

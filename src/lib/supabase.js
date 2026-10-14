@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { addDays, today } from '../utils/format'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -184,6 +185,12 @@ export async function sendMagicLink(email) {
 
   if (error) throw normalizeAuthEmailError(error, 'enviar el magic link')
 
+  return { ok: true }
+}
+
+export async function updatePassword(newPassword) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) throw error
   return { ok: true }
 }
 
@@ -415,8 +422,13 @@ export async function fetchClients() {
     contact: client.contact ?? '',
     rut: client.rut ?? '',
     website: client.website ?? '',
-    client_phone: client.client_phone ?? '',
+    client_phone: client.client_phone ?? client.phone ?? '',
   }))
+}
+
+// En ILIKE, % y _ son comodines: se escapan para comparar el nombre literal.
+function escapeLikePattern(value) {
+  return String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`)
 }
 
 export async function upsertClient(client) {
@@ -427,7 +439,7 @@ export async function upsertClient(client) {
     .from('clients')
     .select('id')
     .eq('user_id', userId)
-    .ilike('name', client.name)
+    .ilike('name', escapeLikePattern(client.name ?? ''))
     .order('created_at', { ascending: false })
     .limit(1)
 
@@ -442,7 +454,7 @@ export async function upsertClient(client) {
       contact: client.contact ?? '',
       rut: client.rut ?? '',
       website: client.website ?? '',
-      client_phone: client.client_phone ?? '',
+      client_phone: client.client_phone ?? client.phone ?? '',
     })
     .select('id')
     .single()
@@ -460,7 +472,7 @@ export async function saveClient(client) {
         contact: client.contact ?? '',
         rut: client.rut ?? '',
         website: client.website ?? '',
-        client_phone: client.client_phone ?? '',
+        client_phone: client.client_phone ?? client.phone ?? '',
       })
       .eq('id', client.id)
 
@@ -479,7 +491,7 @@ export async function saveClient(client) {
       contact: client.contact ?? '',
       rut: client.rut ?? '',
       website: client.website ?? '',
-      client_phone: client.client_phone ?? '',
+      client_phone: client.client_phone ?? client.phone ?? '',
     })
     .select('id')
     .single()
@@ -497,10 +509,18 @@ export async function deleteClient(id) {
   if (error) throw error
 }
 
+// El listado no trae issuer_snapshot: incluye el logo en base64 de cada
+// cotización y hacía que la lista pesara megas. El detalle sí lo trae (fetchQuote).
+const QUOTE_LIST_COLUMNS = [
+  'id', 'user_id', 'number', 'status', 'currency', 'issue_date', 'valid_until', 'notes',
+  'client_name', 'client_contact', 'client_rut', 'client_phone', 'client_website',
+  'equipment_enabled', 'equipment_brand', 'equipment_model', 'equipment_serial', 'equipment_year', 'equipment_extra',
+].join(', ')
+
 export async function fetchQuotes() {
   const { data, error } = await supabase
     .from('quotes')
-    .select('*, quote_items(subtotal, qty, unit_price, shipping)')
+    .select(`${QUOTE_LIST_COLUMNS}, quote_items(subtotal, qty, unit_price, shipping)`)
     .order('number', { ascending: false })
 
   if (error) throw error
@@ -594,9 +614,38 @@ export async function updateQuote(q) {
   return q
 }
 
+// Guarda cotización + ítems en UNA transacción (función SQL save_quote).
+// El número se asigna en el servidor solo al crear. Si la función aún no
+// existe en la base (migración pendiente), usa el camino anterior.
 export async function saveQuote(q, isNew = false) {
-  if (isNew) return createQuote(q)
-  return updateQuote(q)
+  const userId = q.userId ?? await getCurrentUserId()
+  if (!userId) throw new Error('No hay una sesión activa para guardar la cotización.')
+
+  const { data, error } = await supabase.rpc('save_quote', {
+    p_quote: { ...quoteToDb({ ...q, userId }), id: q.id },
+    p_items: (q.items ?? []).map((item, index) => {
+      const { quote_id: _ignored, ...row } = itemToDb(item, q.id, index)
+      return row
+    }),
+  })
+
+  if (error) {
+    const missingFunction = error.code === 'PGRST202' || /save_quote/.test(error.message ?? '') && /not find|does not exist/i.test(error.message ?? '')
+    if (!missingFunction) throw error
+    console.warn('save_quote no está instalada en Supabase; usando guardado no transaccional.')
+    return isNew ? createQuote(q) : updateQuote(q)
+  }
+
+  if (q.client?.name?.trim()) {
+    await upsertClient({ ...q.client, userId: data?.user_id ?? userId }).catch(() => { })
+  }
+
+  return {
+    ...q,
+    id: data?.id ?? q.id,
+    number: data?.number ?? q.number,
+    userId: data?.user_id ?? userId,
+  }
 }
 
 export async function deleteQuote(id) {
@@ -614,14 +663,10 @@ export async function duplicateQuote(q) {
     id: crypto.randomUUID(),
     number: null,
     status: 'draft',
-    issueDate: new Date().toISOString().split('T')[0],
-    validUntil: (() => {
-      const nextDate = new Date()
-      nextDate.setDate(nextDate.getDate() + 30)
-      return nextDate.toISOString().split('T')[0]
-    })(),
+    issueDate: today(),
+    validUntil: addDays(today(), 30),
     items: q.items.map((item) => ({ ...item, id: crypto.randomUUID() })),
   }
 
-  return createQuote(newQuote)
+  return saveQuote(newQuote, true)
 }

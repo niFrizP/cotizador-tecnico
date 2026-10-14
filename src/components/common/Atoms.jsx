@@ -2,7 +2,7 @@ import { C, F } from "../../constants/ui";
 
 export function Sec({ t, children, style }) {
     return (
-        <div
+        <section
             style={{
                 background: C.white,
                 border: "1px solid #ddd",
@@ -13,7 +13,7 @@ export function Sec({ t, children, style }) {
             }}
         >
             {t && (
-                <p
+                <h3
                     style={{
                         fontSize: 11,
                         fontWeight: 700,
@@ -24,30 +24,40 @@ export function Sec({ t, children, style }) {
                     }}
                 >
                     {t}
-                </p>
+                </h3>
             )}
             {children}
-        </div>
+        </section>
     );
 }
 
-export function F2({ l, children }) {
+/* Campo con etiqueta. Si el hijo es un único input, la etiqueta lo envuelve
+   y queda asociada (clic en la etiqueta enfoca el campo; lectores de pantalla
+   lo anuncian). Con htmlFor se puede asociar explícitamente. */
+export function F2({ l, children, htmlFor }) {
+    const labelStyle = {
+        display: "block",
+        fontSize: 11,
+        color: C.gray,
+        fontWeight: 600,
+        marginBottom: 4,
+        letterSpacing: ".3px",
+    };
+
+    if (htmlFor) {
+        return (
+            <div style={{ marginBottom: 10 }}>
+                <label htmlFor={htmlFor} style={labelStyle}>{l}</label>
+                {children}
+            </div>
+        );
+    }
+
     return (
-        <div style={{ marginBottom: 10 }}>
-            <label
-                style={{
-                    display: "block",
-                    fontSize: 11,
-                    color: C.gray,
-                    fontWeight: 600,
-                    marginBottom: 4,
-                    letterSpacing: ".3px",
-                }}
-            >
-                {l}
-            </label>
+        <label style={{ display: "block", marginBottom: 10 }}>
+            <span style={labelStyle}>{l}</span>
             {children}
-        </div>
+        </label>
     );
 }
 
@@ -69,12 +79,14 @@ export function TR({ l, v, b }) {
     );
 }
 
-export function Btn({ children, onClick, s, style, disabled, type = "button" }) {
+export function Btn({ children, onClick, s, style, disabled, type = "button", ariaLabel }) {
     return (
         <button
             type={type}
             onClick={onClick}
             disabled={disabled}
+            aria-label={ariaLabel}
+            className={s ? "ui-btn ui-btn--solid" : "ui-btn"}
             style={{
                 padding: "8px 18px",
                 borderRadius: 5,
@@ -84,16 +96,9 @@ export function Btn({ children, onClick, s, style, disabled, type = "button" }) 
                 background: s ? "#000" : "#fff",
                 color: s ? "#fff" : "#555",
                 fontFamily: F,
-                transition: "opacity .12s",
                 cursor: disabled ? "not-allowed" : "pointer",
                 opacity: disabled ? 0.55 : 1,
                 ...style,
-            }}
-            onMouseEnter={(e) => {
-                if (!disabled) e.currentTarget.style.opacity = ".75";
-            }}
-            onMouseLeave={(e) => {
-                e.currentTarget.style.opacity = disabled ? "0.55" : "1";
             }}
         >
             {children}
@@ -104,30 +109,13 @@ export function Btn({ children, onClick, s, style, disabled, type = "button" }) 
 export function IB({ children, onClick, title, d }) {
     return (
         <button
+            type="button"
             onClick={onClick}
             title={title}
-            style={{
-                width: 30,
-                height: 30,
-                borderRadius: 5,
-                border: "1px solid #ddd",
-                background: "#fff",
-                fontSize: 14,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "all .12s",
-            }}
-            onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = d ? "#dc2626" : "#000";
-                e.currentTarget.style.background = d ? "#fef2f2" : "#f5f5f5";
-            }}
-            onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = "#ddd";
-                e.currentTarget.style.background = "#fff";
-            }}
+            aria-label={title}
+            className={d ? "ui-ib ui-ib--danger" : "ui-ib"}
         >
-            {children}
+            <span aria-hidden="true">{children}</span>
         </button>
     );
 }
