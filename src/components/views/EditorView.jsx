@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Btn, F2, Sec, TR } from "../common/Atoms";
 import { C, IS, SL } from "../../constants/ui";
-import { fmtNum, pad } from "../../utils/format";
+import { fmtNum, quoteLabel } from "../../utils/format";
 import { mkItem } from "../../utils/quoteFactory";
 import { logoFileToDataUrl } from "../../utils/image";
 
@@ -65,7 +65,7 @@ export default function EditorView({ quote: init, onSave, onCancel, onPreview, o
         <div>
           <button type="button" onClick={onCancel} style={{ background: "none", border: "none", color: C.gray, fontSize: 13, padding: "6px 0", fontWeight: 500 }}>← Volver</button>
           <h2 style={{ fontSize: isCompact ? 20 : 22, fontWeight: 700, color: C.black, marginTop: 4 }}>
-            {q.number != null ? `Cotización #${pad(q.number)}` : "Nueva cotización"}
+            {q.number != null ? `Cotización ${quoteLabel(q.number, issuer?.quotePrefix)}` : "Nueva cotización"}
           </h2>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", width: isCompact ? "100%" : "auto" }}>

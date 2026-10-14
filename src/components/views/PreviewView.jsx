@@ -9,7 +9,7 @@ export default function PreviewView({ quote: q, onBack, onList, totals, issuer: 
   const exp = q.status === "sent" && q.validUntil < today();
   const hasShp = q.items.some(i => parseFloat(i.shipping) > 0);
   const logo = safeImageSrc(iss.logoDataUrl);
-  const quoteNumberLabel = fmtQuoteNumber(q.number);
+  const quoteNumberLabel = fmtQuoteNumber(q.number, gIss.quotePrefix);
   const initials = (iss.name || "").split(" ").map(w => w[0]).join("").slice(0, 2) || "N!";
   const { isCompact } = responsive;
 

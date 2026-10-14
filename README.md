@@ -33,8 +33,9 @@ VITE_AUTH_REDIRECT_URL=https://tu-dominio.cl
 
 3. Ejecuta las migraciones de `supabase/migrations/` en Supabase → SQL Editor, en orden.
    - `20261014_fase0_save_quote.sql`: guardado transaccional de cotizaciones (`save_quote`).
-     Si aun no se ejecuta, la app sigue funcionando con el guardado anterior (no transaccional)
-     y muestra un aviso en la consola.
+   - `20261015_fase1_negocios.sql`: "Mi negocio" (multi-tenant). Crea `organizations` y
+     `organization_members`, mueve cotizaciones, clientes y emisor a un negocio por usuario,
+     numeracion por negocio y RLS por pertenencia. Requiere la version de la app de esta rama.
 
 ## Scripts
 
@@ -52,6 +53,7 @@ src/
   index.css                  estilos globales, hover y tamanos tactiles
   components/
     common/Atoms.jsx         Sec, F2, TR, Btn, IB
+    common/TaxModePicker.jsx tipo de impuesto del negocio
     views/
       ListView.jsx           listado de cotizaciones
       EditorView.jsx         crear / editar cotizacion
@@ -61,6 +63,7 @@ src/
       AdminView.jsx          usuarios (solo admin)
       LoginView.jsx          inicio de sesion
       ResetPasswordView.jsx  nueva contrasena tras el correo de recuperacion
+      OnboardingView.jsx     crear "Mi negocio" en el primer ingreso
   constants/ui.js            colores, etiquetas y estilos base
   hooks/useResponsiveLayout.js
   lib/supabase.js            acceso a datos
@@ -73,9 +76,16 @@ src/
 supabase/migrations/         SQL a ejecutar en Supabase
 ```
 
+## Modelo de datos
+
+- **Negocio** (`organizations`): quien emite las cotizaciones (un independiente o una pyme).
+  Tiene nombre, tipo de impuesto, prefijo y su propio correlativo.
+- **Miembros** (`organization_members`): usuarios del negocio con rol `owner`, `editor` o `viewer`.
+- **Clientes, cotizaciones y emisor** pertenecen a un negocio (`org_id`).
+
 ## Flujo principal
 
-1. Cargar cotizaciones, clientes y emisor desde Supabase.
+1. Cargar los negocios del usuario (si no tiene, se pide crear uno) y luego cotizaciones, clientes y emisor del negocio activo.
 2. Crear o editar una cotizacion desde el editor.
 3. Guardar: `save_quote` guarda cotizacion + items en una transaccion y asigna el numero (solo al crear).
 4. Generar PDF tras guardar o desde la vista previa.

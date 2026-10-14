@@ -1,7 +1,14 @@
 export const pad = (n) =>
     n != null ? String(n).padStart(3, "0") : "---";
 
-export const fmtQuoteNumber = (n) => (n != null ? pad(n) : "Se asigna al guardar");
+/** Número visible: con prefijo del negocio si tiene (p. ej. "COT-012"). */
+export const quoteLabel = (n, prefix = "") => {
+    if (n == null) return "";
+    const clean = String(prefix ?? "").trim();
+    return clean ? `${clean}-${pad(n)}` : pad(n);
+};
+
+export const fmtQuoteNumber = (n, prefix = "") => (n != null ? quoteLabel(n, prefix) : "Se asigna al guardar");
 
 /* Fechas en formato YYYY-MM-DD usando la hora LOCAL del dispositivo.
    (toISOString() usa UTC: en Chile, después de las 21:00 devolvía el día siguiente). */

@@ -298,6 +298,7 @@ export async function createManagedUser({ email, password, fullName, role }) {
 export function dbToQuote(row, items = []) {
   return {
     id: row.id,
+    orgId: row.org_id ?? null,
     userId: row.user_id ?? null,
     number: row.number,
     status: row.status,
@@ -340,6 +341,7 @@ export function dbToItem(row) {
 export function quoteToDb(q) {
   return {
     ...(q.userId ? { user_id: q.userId } : {}),
+    ...(q.orgId ? { org_id: q.orgId } : {}),
     status: q.status,
     currency: q.currency,
     issue_date: q.issueDate,
@@ -372,58 +374,137 @@ export function itemToDb(item, quoteId, index) {
   }
 }
 
-export async function getNextNumber() {
-  const { data, error } = await supabase.rpc('next_quote_number')
+/* ─── Negocios ("Mi negocio") ─────────────────────────────────────────── */
+
+export const TAX_MODES = ['iva', 'exenta', 'honorarios']
+
+function mapOrganization(row, role) {
+  if (!row) return null
+  return {
+    id: row.id,
+    name: row.name ?? '',
+    taxMode: row.tax_mode ?? 'iva',
+    quotePrefix: row.quote_prefix ?? '',
+    nextQuoteNumber: row.next_quote_number ?? 1,
+    role: role ?? null,
+  }
+}
+
+/** Negocios a los que pertenece el usuario actual, con su rol en cada uno. */
+export async function fetchMyOrganizations() {
+  const userId = await getCurrentUserId()
+  if (!userId) return []
+
+  const { data, error } = await supabase
+    .from('organization_members')
+    .select('role, created_at, organizations(id, name, tax_mode, quote_prefix, next_quote_number)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true })
+
+  if (error) throw error
+  return (data ?? [])
+    .filter((row) => row.organizations)
+    .map((row) => mapOrganization(row.organizations, row.role))
+}
+
+export async function createOrganization({ name, taxMode = 'iva' }) {
+  const { data, error } = await supabase.rpc('create_organization', {
+    p_name: name,
+    p_tax_mode: taxMode,
+  })
   if (error) throw error
   return data
 }
 
-export async function fetchIssuer() {
-  const userId = await getCurrentUserId()
-  if (!userId) return { ...DEFAULT_ISSUER }
+export async function updateOrganization(orgId, { name, taxMode, quotePrefix }) {
+  const payload = {}
+  if (name !== undefined) payload.name = name.trim()
+  if (taxMode !== undefined) payload.tax_mode = taxMode
+  if (quotePrefix !== undefined) payload.quote_prefix = quotePrefix.trim().toUpperCase()
 
+  const { data, error } = await supabase
+    .from('organizations')
+    .update(payload)
+    .eq('id', orgId)
+    .select('id, name, tax_mode, quote_prefix, next_quote_number')
+    .single()
+
+  if (error) throw error
+  return mapOrganization(data)
+}
+
+function requireOrg(orgId) {
+  if (!orgId) throw new Error('No hay un negocio seleccionado.')
+}
+
+/* ─── Emisor (uno por negocio) ──────────────────────────────────────────── */
+
+export async function fetchIssuer(orgId) {
+  requireOrg(orgId)
   const { data, error } = await supabase
     .from('issuer')
     .select('*')
-    .eq('user_id', userId)
-    .order('updated_at', { ascending: false })
+    .eq('org_id', orgId)
     .limit(1)
 
   if (error) throw error
   return mapIssuer(data?.[0])
 }
 
-export async function saveIssuer(issuer) {
-  const userId = await getCurrentUserId()
-  if (!userId) throw new Error('No hay una sesión activa para guardar los datos del emisor.')
+export async function saveIssuer(orgId, issuer) {
+  requireOrg(orgId)
 
-  const { error } = await supabase
+  const { data: existing, error: findError } = await supabase
     .from('issuer')
-    .upsert({
-      user_id: userId,
-      ...issuerToDb(issuer),
-    }, { onConflict: 'user_id' })
+    .select('id')
+    .eq('org_id', orgId)
+    .limit(1)
+
+  if (findError) throw findError
+
+  const row = issuerToDb(issuer)
+  const { error } = existing?.length
+    ? await supabase.from('issuer').update(row).eq('id', existing[0].id)
+    : await supabase.from('issuer').insert({ ...row, org_id: orgId })
 
   if (error) throw error
 }
 
-export async function fetchClients() {
-  const { data, error } = await supabase
-    .from('clients')
-    .select('*')
-    .order('created_at', { ascending: false })
+/* ─── Clientes (agenda del negocio) ─────────────────────────────────────── */
 
-  if (error) throw error
-
-  return (data ?? []).map((client) => ({
+function mapClient(client) {
+  return {
     id: client.id,
+    orgId: client.org_id ?? null,
     userId: client.user_id ?? null,
     name: client.name ?? '',
     contact: client.contact ?? '',
     rut: client.rut ?? '',
     website: client.website ?? '',
     client_phone: client.client_phone ?? client.phone ?? '',
-  }))
+  }
+}
+
+function clientToDb(client) {
+  return {
+    name: client.name ?? '',
+    contact: client.contact ?? '',
+    rut: client.rut ?? '',
+    website: client.website ?? '',
+    client_phone: client.client_phone ?? client.phone ?? '',
+  }
+}
+
+export async function fetchClients(orgId) {
+  requireOrg(orgId)
+  const { data, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('org_id', orgId)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []).map(mapClient)
 }
 
 // En ILIKE, % y _ son comodines: se escapan para comparar el nombre literal.
@@ -431,14 +512,14 @@ function escapeLikePattern(value) {
   return String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`)
 }
 
-export async function upsertClient(client) {
-  const userId = client.userId ?? await getCurrentUserId()
-  if (!userId) throw new Error('No hay una sesión activa para asociar el cliente.')
+/** Agrega el cliente a la agenda si no existe uno con el mismo nombre. */
+export async function upsertClient(orgId, client) {
+  requireOrg(orgId)
 
   const { data: existing, error: existingError } = await supabase
     .from('clients')
     .select('id')
-    .eq('user_id', userId)
+    .eq('org_id', orgId)
     .ilike('name', escapeLikePattern(client.name ?? ''))
     .order('created_at', { ascending: false })
     .limit(1)
@@ -448,14 +529,7 @@ export async function upsertClient(client) {
 
   const { data, error } = await supabase
     .from('clients')
-    .insert({
-      user_id: userId,
-      name: client.name ?? '',
-      contact: client.contact ?? '',
-      rut: client.rut ?? '',
-      website: client.website ?? '',
-      client_phone: client.client_phone ?? client.phone ?? '',
-    })
+    .insert({ ...clientToDb(client), org_id: orgId })
     .select('id')
     .single()
 
@@ -463,36 +537,21 @@ export async function upsertClient(client) {
   return data.id
 }
 
-export async function saveClient(client) {
+export async function saveClient(orgId, client) {
   if (client.id) {
     const { error } = await supabase
       .from('clients')
-      .update({
-        name: client.name ?? '',
-        contact: client.contact ?? '',
-        rut: client.rut ?? '',
-        website: client.website ?? '',
-        client_phone: client.client_phone ?? client.phone ?? '',
-      })
+      .update(clientToDb(client))
       .eq('id', client.id)
 
     if (error) throw error
     return client.id
   }
 
-  const userId = client.userId ?? await getCurrentUserId()
-  if (!userId) throw new Error('No hay una sesión activa para asociar el cliente.')
-
+  requireOrg(orgId)
   const { data, error } = await supabase
     .from('clients')
-    .insert({
-      user_id: userId,
-      name: client.name ?? '',
-      contact: client.contact ?? '',
-      rut: client.rut ?? '',
-      website: client.website ?? '',
-      client_phone: client.client_phone ?? client.phone ?? '',
-    })
+    .insert({ ...clientToDb(client), org_id: orgId })
     .select('id')
     .single()
 
@@ -509,18 +568,22 @@ export async function deleteClient(id) {
   if (error) throw error
 }
 
+/* ─── Cotizaciones ──────────────────────────────────────────────────────── */
+
 // El listado no trae issuer_snapshot: incluye el logo en base64 de cada
 // cotización y hacía que la lista pesara megas. El detalle sí lo trae (fetchQuote).
 const QUOTE_LIST_COLUMNS = [
-  'id', 'user_id', 'number', 'status', 'currency', 'issue_date', 'valid_until', 'notes',
+  'id', 'org_id', 'user_id', 'number', 'status', 'currency', 'issue_date', 'valid_until', 'notes',
   'client_name', 'client_contact', 'client_rut', 'client_phone', 'client_website',
   'equipment_enabled', 'equipment_brand', 'equipment_model', 'equipment_serial', 'equipment_year', 'equipment_extra',
 ].join(', ')
 
-export async function fetchQuotes() {
+export async function fetchQuotes(orgId) {
+  requireOrg(orgId)
   const { data, error } = await supabase
     .from('quotes')
     .select(`${QUOTE_LIST_COLUMNS}, quote_items(subtotal, qty, unit_price, shipping)`)
+    .eq('org_id', orgId)
     .order('number', { ascending: false })
 
   if (error) throw error
@@ -544,85 +607,13 @@ export async function fetchQuote(id) {
   return dbToQuote(quoteRes.data, itemsRes.data)
 }
 
-export async function createQuote(q) {
-  let number = q.number ?? await getNextNumber()
-  const userId = q.userId ?? await getCurrentUserId()
-
-  if (!userId) throw new Error('No hay una sesión activa para asociar la cotización.')
-
-  let { data: quote, error: qErr } = await supabase
-    .from('quotes')
-    .insert({ ...quoteToDb({ ...q, userId }), number })
-    .select('id, number, user_id')
-    .single()
-
-  if (qErr?.code === '23505' && q.number != null) {
-    number = await getNextNumber()
-    const retry = await supabase
-      .from('quotes')
-      .insert({ ...quoteToDb({ ...q, userId }), number })
-      .select('id, number, user_id')
-      .single()
-    quote = retry.data
-    qErr = retry.error
-  }
-
-  if (qErr) throw qErr
-
-  if (q.items?.length > 0) {
-    const { error: iErr } = await supabase
-      .from('quote_items')
-      .insert(q.items.map((item, index) => itemToDb(item, quote.id, index)))
-
-    if (iErr) throw iErr
-  }
-
-  if (q.client?.name?.trim()) {
-    await upsertClient({ ...q.client, userId }).catch(() => { })
-  }
-
-  return { ...q, id: quote.id, number: quote.number ?? number, userId: quote.user_id ?? userId }
-}
-
-export async function updateQuote(q) {
-  const { error: qErr } = await supabase
-    .from('quotes')
-    .update(quoteToDb(q))
-    .eq('id', q.id)
-
-  if (qErr) throw qErr
-
-  const { error: dErr } = await supabase
-    .from('quote_items')
-    .delete()
-    .eq('quote_id', q.id)
-
-  if (dErr) throw dErr
-
-  if (q.items?.length > 0) {
-    const { error: iErr } = await supabase
-      .from('quote_items')
-      .insert(q.items.map((item, index) => itemToDb(item, q.id, index)))
-
-    if (iErr) throw iErr
-  }
-
-  if (q.client?.name?.trim()) {
-    await upsertClient({ ...q.client, userId: q.userId }).catch(() => { })
-  }
-
-  return q
-}
-
 // Guarda cotización + ítems en UNA transacción (función SQL save_quote).
-// El número se asigna en el servidor solo al crear. Si la función aún no
-// existe en la base (migración pendiente), usa el camino anterior.
-export async function saveQuote(q, isNew = false) {
-  const userId = q.userId ?? await getCurrentUserId()
-  if (!userId) throw new Error('No hay una sesión activa para guardar la cotización.')
+// El número se asigna en el servidor, por negocio, solo al crear.
+export async function saveQuote(q) {
+  requireOrg(q.orgId)
 
   const { data, error } = await supabase.rpc('save_quote', {
-    p_quote: { ...quoteToDb({ ...q, userId }), id: q.id },
+    p_quote: { ...quoteToDb(q), id: q.id },
     p_items: (q.items ?? []).map((item, index) => {
       const { quote_id: _ignored, ...row } = itemToDb(item, q.id, index)
       return row
@@ -630,21 +621,22 @@ export async function saveQuote(q, isNew = false) {
   })
 
   if (error) {
-    const missingFunction = error.code === 'PGRST202' || /save_quote/.test(error.message ?? '') && /not find|does not exist/i.test(error.message ?? '')
-    if (!missingFunction) throw error
-    console.warn('save_quote no está instalada en Supabase; usando guardado no transaccional.')
-    return isNew ? createQuote(q) : updateQuote(q)
+    if (error.code === 'PGRST202') {
+      throw new Error('Falta ejecutar las migraciones de supabase/migrations en la base de datos.')
+    }
+    throw error
   }
 
   if (q.client?.name?.trim()) {
-    await upsertClient({ ...q.client, userId: data?.user_id ?? userId }).catch(() => { })
+    await upsertClient(data?.org_id ?? q.orgId, q.client).catch(() => { })
   }
 
   return {
     ...q,
     id: data?.id ?? q.id,
     number: data?.number ?? q.number,
-    userId: data?.user_id ?? userId,
+    userId: data?.user_id ?? q.userId,
+    orgId: data?.org_id ?? q.orgId,
   }
 }
 
@@ -662,11 +654,12 @@ export async function duplicateQuote(q) {
     ...q,
     id: crypto.randomUUID(),
     number: null,
+    userId: null,
     status: 'draft',
     issueDate: today(),
     validUntil: addDays(today(), 30),
     items: q.items.map((item) => ({ ...item, id: crypto.randomUUID() })),
   }
 
-  return saveQuote(newQuote, true)
+  return saveQuote(newQuote)
 }
