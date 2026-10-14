@@ -1,5 +1,5 @@
 import { SC, SL } from "../constants/ui";
-import { calcTotals, fmtDate, fmtNum, fmtQuoteNumber, pad, today } from "./format";
+import { calcTotals, escapeHtml as e, fmtDate, fmtNum, fmtQuoteNumber, pad, safeImageSrc, safeUrl, today } from "./format";
 
 export function generatePDF(q, iss) {
   return new Promise((resolve) => {
@@ -7,7 +7,7 @@ export function generatePDF(q, iss) {
     const sc = SC[q.status];
     const exp = q.status === "sent" && q.validUntil < today();
     const hasShp = q.items.some((i) => parseFloat(i.shipping) > 0);
-    const logo = iss.logoDataUrl;
+    const logo = safeImageSrc(iss.logoDataUrl);
     const initials =
       (iss.name || "")
         .split(" ")
@@ -16,12 +16,17 @@ export function generatePDF(q, iss) {
         .slice(0, 2) || "N!";
     const quoteNumberLabel = fmtQuoteNumber(q.number);
     const fileNumber = q.number != null ? pad(q.number) : "sin_numero";
-    const filename = `Cotizacion_${fileNumber}_${(q.client?.name || "").replace(/\s+/g, "_") || "cliente"
-      }`;
+    const clientSlug = (q.client?.name || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60);
+    const filename = `Cotizacion_${fileNumber}_${clientSlug || "cliente"}`;
 
     const logoHtml = logo
-      ? `<img src="${logo}" style="width:52px;height:52px;border-radius:50%;object-fit:cover;display:block"/>`
-      : `<div style="width:52px;height:52px;border-radius:50%;background:#000;display:table-cell;text-align:center;vertical-align:middle;flex-shrink:0"><span style="color:#fff;font-size:16px;font-weight:700">${initials}</span></div>`;
+      ? `<img src="${e(logo)}" style="width:52px;height:52px;border-radius:50%;object-fit:cover;display:block"/>`
+      : `<div style="width:52px;height:52px;border-radius:50%;background:#000;display:table-cell;text-align:center;vertical-align:middle;flex-shrink:0"><span style="color:#fff;font-size:16px;font-weight:700">${e(initials)}</span></div>`;
 
     const equipmentRows = q.equipment?.enabled
       ? [
@@ -34,7 +39,7 @@ export function generatePDF(q, iss) {
         .filter(([, v]) => v)
         .map(
           ([l, v]) =>
-            `<tr><td style="font-size:9pt;color:#535353;font-weight:600;padding-right:8px;padding-bottom:2px;white-space:nowrap">${l}:</td><td style="font-size:9pt;color:#000;padding-bottom:2px">${v}</td></tr>`,
+            `<tr><td style="font-size:9pt;color:#535353;font-weight:600;padding-right:8px;padding-bottom:2px;white-space:nowrap">${l}:</td><td style="font-size:9pt;color:#000;padding-bottom:2px">${e(v)}</td></tr>`,
         )
         .join("")
       : "";
@@ -45,13 +50,13 @@ export function generatePDF(q, iss) {
         const sv = (parseFloat(item.unitPrice) || 0) * (parseFloat(item.qty) || 0);
         return `<tr>
         <td style="padding:8px 0;font-size:9pt;color:#000;vertical-align:top;border-bottom:0.5pt solid #535353">
-          <strong>${item.description}</strong>
-          ${item.link
-            ? `<br/><a href="${item.link}" style="color:#2563eb;font-size:8pt">${item.link}</a>`
+          <strong>${e(item.description)}</strong>
+          ${safeUrl(item.link)
+            ? `<br/><a href="${e(safeUrl(item.link))}" style="color:#2563eb;font-size:8pt">${e(item.link)}</a>`
             : ""
           }
         </td>
-        <td style="padding:8px 6px;font-size:9pt;color:#000;text-align:center;vertical-align:top;border-bottom:0.5pt solid #535353">${item.qty
+        <td style="padding:8px 6px;font-size:9pt;color:#000;text-align:center;vertical-align:top;border-bottom:0.5pt solid #535353">${e(item.qty)
           } ${parseFloat(item.qty) === 1 ? "Unidad" : "Unidades"}</td>
         <td style="padding:8px 6px;font-size:9pt;color:#000;text-align:center;vertical-align:top;border-bottom:0.5pt solid #535353">${fmtNum(
             item.unitPrice,
@@ -74,7 +79,7 @@ export function generatePDF(q, iss) {
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>${filename}</title>
+  <title>${e(filename)}</title>
   <link href="https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet"/>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -108,11 +113,11 @@ export function generatePDF(q, iss) {
       <div class="logo-row">
         ${logoHtml}
         <div style="line-height:1.55">
-          <div style="font-size:13pt;font-weight:600;color:#000">${iss.name || ""}</div>
-          ${iss.title ? `<div style="font-size:9pt;color:#000">${iss.title}</div>` : ""}
-          ${iss.website ? `<div style="font-size:9pt;color:#000">${iss.website}</div>` : ""}
-          ${iss.phone ? `<div style="font-size:9pt;color:#000">${iss.phone}</div>` : ""}
-          ${iss.email ? `<div style="font-size:9pt;color:#000">${iss.email}</div>` : ""}
+          <div style="font-size:13pt;font-weight:600;color:#000">${e(iss.name)}</div>
+          ${iss.title ? `<div style="font-size:9pt;color:#000">${e(iss.title)}</div>` : ""}
+          ${iss.website ? `<div style="font-size:9pt;color:#000">${e(iss.website)}</div>` : ""}
+          ${iss.phone ? `<div style="font-size:9pt;color:#000">${e(iss.phone)}</div>` : ""}
+          ${iss.email ? `<div style="font-size:9pt;color:#000">${e(iss.email)}</div>` : ""}
         </div>
       </div>
     </div>
@@ -131,14 +136,14 @@ export function generatePDF(q, iss) {
   <div class="body">
     <div class="cli-tbl">
       <div class="cli-l">
-        ${q.client.name ? `<div style="font-size:13pt;font-weight:700;color:#000">${q.client.name}</div>` : ""}
+        ${q.client.name ? `<div style="font-size:13pt;font-weight:700;color:#000">${e(q.client.name)}</div>` : ""}
         ${q.client.contact
-        ? `<div style="font-size:9pt;color:#000;margin-top:2px">${q.client.contact}</div>`
+        ? `<div style="font-size:9pt;color:#000;margin-top:2px">${e(q.client.contact)}</div>`
         : ""
       }
-        ${q.client.rut ? `<div style="font-size:9pt;color:#000">RUT: ${q.client.rut}</div>` : ""}
-        ${q.client.phone ? `<div style="font-size:9pt;color:#000">Tel: ${q.client.phone}</div>` : ""}
-        ${q.client.website ? `<div style="font-size:9pt;color:#000">${q.client.website}</div>` : ""}
+        ${q.client.rut ? `<div style="font-size:9pt;color:#000">RUT: ${e(q.client.rut)}</div>` : ""}
+        ${q.client.phone ? `<div style="font-size:9pt;color:#000">Tel: ${e(q.client.phone)}</div>` : ""}
+        ${q.client.website ? `<div style="font-size:9pt;color:#000">${e(q.client.website)}</div>` : ""}
       </div>
       ${q.equipment?.enabled && equipmentRows
         ? `<div class="cli-r">
@@ -152,9 +157,9 @@ export function generatePDF(q, iss) {
     <table class="items">
       <thead>
         <tr>
-          <th style="padding:0 0 7px 0;text-align:left;font-size:10pt;font-weight:600;color:#000;width:40%">Articulo</th>
+          <th style="padding:0 0 7px 0;text-align:left;font-size:10pt;font-weight:600;color:#000;width:40%">Artículo</th>
           <th style="padding:0 6px 7px;text-align:center;font-size:10pt;font-weight:600;color:#000">Cantidad</th>
-          <th style="padding:0 6px 7px;text-align:center;font-size:10pt;font-weight:600;color:#000">Precio Uni.</th>
+          <th style="padding:0 6px 7px;text-align:center;font-size:10pt;font-weight:600;color:#000">Precio unit.</th>
           ${hasShp
         ? `<th style="padding:0 6px 7px;text-align:center;font-size:10pt;font-weight:600;color:#000">Envío</th>`
         : ""
@@ -184,7 +189,7 @@ export function generatePDF(q, iss) {
     <div style="margin-bottom:18px">
       <div style="font-size:9pt;font-weight:700;color:#535353;text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px">Notas y condiciones</div>
       <div style="height:0.5pt;background:#535353;margin-bottom:7px"></div>
-      <div style="font-size:9pt;color:#535353;line-height:1.7;white-space:pre-line">${q.notes}</div>
+      <div style="font-size:9pt;color:#535353;line-height:1.7;white-space:pre-line">${e(q.notes)}</div>
     </div>`
         : ""
       }
@@ -194,17 +199,17 @@ export function generatePDF(q, iss) {
     <div style="margin-bottom:14px">
       <div style="font-size:9pt;font-weight:600;color:#535353;text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px">Información de pago</div>
       <div style="font-size:8.5pt;color:#535353;line-height:1.9">
-        ${iss.bank ? `<div><span style="font-weight:500">Banco:</span> ${iss.bank}</div>` : ""}
+        ${iss.bank ? `<div><span style="font-weight:500">Banco:</span> ${e(iss.bank)}</div>` : ""}
         ${iss.accountName
-          ? `<div><span style="font-weight:500">Nombre:</span> ${iss.accountName}</div>`
+          ? `<div><span style="font-weight:500">Nombre:</span> ${e(iss.accountName)}</div>`
           : ""
         }
         ${iss.accountNumber
-          ? `<div><span style="font-weight:500">Número de cuenta:</span> ${iss.accountNumber}</div>`
+          ? `<div><span style="font-weight:500">Número de cuenta:</span> ${e(iss.accountNumber)}</div>`
           : ""
         }
         ${iss.accountType
-          ? `<div><span style="font-weight:500">Tipo de cuenta:</span> ${iss.accountType}</div>`
+          ? `<div><span style="font-weight:500">Tipo de cuenta:</span> ${e(iss.accountType)}</div>`
           : ""
         }
       </div>
@@ -214,21 +219,31 @@ export function generatePDF(q, iss) {
   </div>
 
   <div class="ftr">
-    <div style="font-size:7.5pt;color:#535353;font-weight:500;line-height:1.8">${iss.name || ""}${iss.title ? ` · ${iss.title}` : ""
+    <div style="font-size:7.5pt;color:#535353;font-weight:500;line-height:1.8">${e(iss.name)}${iss.title ? ` · ${e(iss.title)}` : ""
       }</div>
-    <div style="font-size:7.5pt;color:#535353;line-height:1.8">${iss.email ? `Correo electrónico: ${iss.email}` : ""
-      }${iss.email && iss.phone ? "  │  " : ""}${iss.phone ? `Teléfono: ${iss.phone}` : ""
+    <div style="font-size:7.5pt;color:#535353;line-height:1.8">${iss.email ? `Correo electrónico: ${e(iss.email)}` : ""
+      }${iss.email && iss.phone ? "  │  " : ""}${iss.phone ? `Teléfono: ${e(iss.phone)}` : ""
       }</div>
   </div>
 </div>
 <script>
-  window.onload = function() {
-    setTimeout(function() {
-      document.title = "${filename}";
+  (function () {
+    var printed = false;
+    function go() {
+      if (printed) return;
+      printed = true;
       window.print();
-      setTimeout(function(){ window.close(); }, 1500);
-    }, 1200);
-  };
+    }
+    window.addEventListener("afterprint", function () { window.close(); });
+    window.addEventListener("load", function () {
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(go);
+        setTimeout(go, 2500);
+      } else {
+        setTimeout(go, 1200);
+      }
+    });
+  })();
 </script>
 </body>
 </html>`;
@@ -239,6 +254,8 @@ export function generatePDF(q, iss) {
       return;
     }
 
+    // La ventana del PDF no necesita acceso a la app que la abrió.
+    try { w.opener = null; } catch { /* ignorar */ }
     w.document.open();
     w.document.write(html);
     w.document.close();

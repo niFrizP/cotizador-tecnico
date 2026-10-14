@@ -1,45 +1,25 @@
 import { useState, useRef, useEffect } from "react";
 import { Btn, F2, IB, Sec } from "../common/Atoms";
 import { C, IS } from "../../constants/ui";
+import { draftKey, readDraft, removeDraft, writeDraft } from "../../utils/drafts";
+import { safeUrl } from "../../utils/format";
 
 const EMPTY = { name: "", contact: "", rut: "", website: "", client_phone: "" };
 
-export default function ClientsView({ clients, onSave, onDelete, onBack, responsive = { isCompact: false } }) {
-    const DRAFT_KEY = "cotizador-tecnico.clients-draft.v1";
-    const [list, setList] = useState(clients);
-    const [form, setForm] = useState(EMPTY);
-    const [editId, setEditId] = useState(null);   // id del cliente que se está editando
+export default function ClientsView({ clients, userId, onSave, onDelete, onBack, responsive = { isCompact: false } }) {
+    const DRAFT_KEY = draftKey("clients-draft", userId);
+    // El borrador se lee una sola vez al montar (inicialización perezosa).
+    const [initialDraft] = useState(() => readDraft(DRAFT_KEY));
+    const [form, setForm] = useState(() => ({ ...EMPTY, ...(initialDraft?.form ?? {}) }));
+    const [editId, setEditId] = useState(() => initialDraft?.editId ?? null);   // id del cliente que se está editando
     const [saving, setSaving] = useState(false);
     const [dd, setDd] = useState(false);           // dropdown de sugerencias visible
     const nameRef = useRef(null);
-
-    const loadDraft = () => {
-        try {
-            const raw = window.localStorage.getItem(DRAFT_KEY);
-            if (!raw) return;
-            const parsed = JSON.parse(raw);
-            if (parsed?.form) setForm({ ...EMPTY, ...parsed.form });
-            if (parsed?.editId !== undefined) setEditId(parsed.editId);
-        } catch {
-            window.localStorage.removeItem(DRAFT_KEY);
-        }
-    };
+    const list = clients;
 
     useEffect(() => {
-        loadDraft();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    useEffect(() => {
-        try {
-            window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, editId }));
-        } catch {
-            // Si el navegador bloquea storage, el formulario sigue funcionando en memoria.
-        }
-    }, [form, editId]);
-
-    // Mantener la lista local sincronizada con la prop cuando viene del padre
-    useEffect(() => { setList(clients); }, [clients]);
+        writeDraft(DRAFT_KEY, { form, editId });
+    }, [DRAFT_KEY, form, editId]);
 
     const sf = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
@@ -61,7 +41,7 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
     const cancelEdit = () => {
         setEditId(null);
         setForm(EMPTY);
-        window.localStorage.removeItem(DRAFT_KEY);
+        removeDraft(DRAFT_KEY);
     };
 
     const handleSave = async () => {
@@ -69,15 +49,12 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
         try {
             setSaving(true);
             const payload = editId ? { id: editId, ...form } : { ...form };
-            const savedId = await onSave(payload);
-            const updated = { id: editId ?? savedId, ...form };
-            setList((prev) => {
-                if (editId) return prev.map((c) => (c.id === editId ? updated : c));
-                return [updated, ...prev];
-            });
+            await onSave(payload);
             setEditId(null);
             setForm(EMPTY);
-            window.localStorage.removeItem(DRAFT_KEY);
+            removeDraft(DRAFT_KEY);
+        } catch {
+            // El error ya se mostró en un aviso; el formulario conserva lo escrito.
         } finally {
             setSaving(false);
         }
@@ -86,7 +63,6 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
     const handleDelete = async (id) => {
         if (!confirm("¿Eliminar este cliente? Esta acción no se puede deshacer.")) return;
         await onDelete(id);
-        setList((prev) => prev.filter((c) => c.id !== id));
         if (editId === id) cancelEdit();
     };
 
@@ -176,10 +152,10 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
                         <input value={form.rut} onChange={(e) => sf("rut", e.target.value)} placeholder="12.345.678-9" style={IS} />
                     </F2>
                     <F2 l="Teléfono">
-                        <input value={form.client_phone} onChange={(e) => sf("client_phone", e.target.value)} placeholder="+56 9 1234 5678" style={IS} />
+                        <input type="tel" inputMode="tel" autoComplete="tel" value={form.client_phone} onChange={(e) => sf("client_phone", e.target.value)} placeholder="+56 9 1234 5678" style={IS} />
                     </F2>
                     <F2 l="Sitio web">
-                        <input value={form.website} onChange={(e) => sf("website", e.target.value)} placeholder="https://…" style={IS} />
+                        <input type="url" inputMode="url" value={form.website} onChange={(e) => sf("website", e.target.value)} placeholder="https://…" style={IS} />
                     </F2>
                 </div>
 
@@ -236,7 +212,7 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
                                 <div>
                                     <div style={{ fontSize: 10, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 2 }}>Sitio web</div>
                                     <div style={{ fontSize: 13, color: C.black, wordBreak: "break-word" }}>
-                                        {c.website ? <a href={c.website} target="_blank" rel="noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{c.website}</a> : "—"}
+                                        {safeUrl(c.website) ? <a href={safeUrl(c.website)} target="_blank" rel="noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{c.website}</a> : "—"}
                                     </div>
                                 </div>
                             </div>
@@ -295,8 +271,8 @@ export default function ClientsView({ clients, onSave, onDelete, onBack, respons
                                     <td style={{ padding: "13px 14px", fontSize: 13, color: C.gray }}>{c.rut || <span style={{ color: "#bbb" }}>—</span>}</td>
                                     <td style={{ padding: "13px 14px", fontSize: 13, color: C.gray }}>{c.client_phone || <span style={{ color: "#bbb" }}>—</span>}</td>
                                     <td style={{ padding: "13px 14px", fontSize: 13, color: C.gray }}>
-                                        {c.website
-                                            ? <a href={c.website} target="_blank" rel="noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{c.website}</a>
+                                        {safeUrl(c.website)
+                                            ? <a href={safeUrl(c.website)} target="_blank" rel="noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{c.website}</a>
                                             : <span style={{ color: "#bbb" }}>—</span>
                                         }
                                     </td>
