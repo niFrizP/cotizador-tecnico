@@ -1,23 +1,24 @@
 import { useState } from "react";
 import { Btn, IB } from "../common/Atoms";
 import { C, F, SC, SL } from "../../constants/ui";
-import { fmtDate, fmtNum, pad, today } from "../../utils/format";
+import { fmtDate, fmtNum, pad, quoteLabel, today } from "../../utils/format";
 
-export default function ListView({ quotes, onNew, onEdit, onPreview, onDelete, onDup, onSettings, onClients, totals, responsive }) {
+export default function ListView({ quotePrefix = "", quotes, onNew, onEdit, onPreview, onDelete, onDup, onSettings, onClients, totals, responsive }) {
   const [flt, setFlt] = useState("all");
   const [srch, setSrch] = useState("");
   const { isCompact } = responsive;
+  const shownNumber = (q) => (quotePrefix ? quoteLabel(q.number, quotePrefix) : `#${quoteLabel(q.number)}`);
   const term = srch.trim().toLowerCase().replace(/^#/, "");
   const rows = quotes.filter(q => {
     if (flt !== "all" && q.status !== flt) return false;
     if (!term) return true;
-    const numberText = q.number != null ? `${q.number} ${pad(q.number)}` : "";
+    const numberText = q.number != null ? `${q.number} ${pad(q.number)} ${quoteLabel(q.number, quotePrefix).toLowerCase()}` : "";
     return (q.client?.name ?? "").toLowerCase().includes(term)
       || (q.client?.contact ?? "").toLowerCase().includes(term)
       || numberText.includes(term);
   });
   const askDelete = (q) => {
-    const label = q.number != null ? `#${pad(q.number)}` : "esta cotización";
+    const label = q.number != null ? shownNumber(q) : "esta cotización";
     if (confirm(`¿Eliminar la cotización ${label}${q.client?.name ? ` de ${q.client.name}` : ""}? No se puede deshacer.`)) onDelete(q.id);
   };
   return (
@@ -57,7 +58,7 @@ export default function ListView({ quotes, onNew, onEdit, onPreview, onDelete, o
               <div key={q.id} style={{ background: "#fff", border: "1px solid #ddd", borderRadius: 14, padding: 14, boxShadow: "0 2px 12px rgba(0,0,0,.06)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
                   <div>
-                    <div style={{ fontSize: 12, color: C.gray, fontWeight: 700, letterSpacing: ".6px" }}>#{pad(q.number)}</div>
+                    <div style={{ fontSize: 12, color: C.gray, fontWeight: 700, letterSpacing: ".6px" }}>{shownNumber(q)}</div>
                     <div style={{ fontSize: 18, fontWeight: 700, color: C.black, marginTop: 4 }}>{q.client?.name || "Sin cliente"}</div>
                     {q.client?.contact && <div style={{ fontSize: 13, color: C.gray, marginTop: 2 }}>{q.client.contact}</div>}
                   </div>
@@ -106,7 +107,7 @@ export default function ListView({ quotes, onNew, onEdit, onPreview, onDelete, o
                 const exp = q.status === "sent" && q.validUntil < today();
                 return (
                   <tr key={q.id} className="ui-row" style={{ borderBottom: i < rows.length - 1 ? "1px solid #f0f0f0" : "none" }}>
-                    <td style={{ padding: "13px 16px", fontSize: 13, fontWeight: 700, color: C.black }}>#{pad(q.number)}</td>
+                    <td style={{ padding: "13px 16px", fontSize: 13, fontWeight: 700, color: C.black }}>{shownNumber(q)}</td>
                     <td style={{ padding: "13px 16px" }}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: C.black }}>{q.client?.name || <span style={{ color: "#bbb", fontStyle: "italic", fontWeight: 400 }}>Sin cliente</span>}</div>
                       {q.client?.contact && <div style={{ fontSize: 12, color: C.gray, marginTop: 1 }}>{q.client.contact}</div>}

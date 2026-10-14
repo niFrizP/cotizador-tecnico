@@ -1,5 +1,5 @@
 import { SC, SL } from "../constants/ui";
-import { calcTotals, escapeHtml as e, fmtDate, fmtNum, fmtQuoteNumber, pad, safeImageSrc, safeUrl, today } from "./format";
+import { calcTotals, escapeHtml as e, fmtDate, fmtNum, fmtQuoteNumber, quoteLabel, safeImageSrc, safeUrl, today } from "./format";
 
 export function generatePDF(q, iss) {
   return new Promise((resolve) => {
@@ -14,8 +14,8 @@ export function generatePDF(q, iss) {
         .map((w) => w[0])
         .join("")
         .slice(0, 2) || "N!";
-    const quoteNumberLabel = fmtQuoteNumber(q.number);
-    const fileNumber = q.number != null ? pad(q.number) : "sin_numero";
+    const quoteNumberLabel = e(fmtQuoteNumber(q.number, iss.quotePrefix));
+    const fileNumber = q.number != null ? quoteLabel(q.number, iss.quotePrefix).replace(/[^a-zA-Z0-9-]+/g, "") : "sin_numero";
     const clientSlug = (q.client?.name || "")
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")

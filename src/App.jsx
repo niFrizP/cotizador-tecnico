@@ -12,12 +12,13 @@ import {
   getSession, onAuthStateChange,
   fetchMyProfile, fetchProfiles,
   createManagedUser, updateProfile,
+  fetchMyOrganizations, createOrganization, updateOrganization,
 } from "./lib/supabase";
 import { C, F } from "./constants/ui";
 import { calcTotals } from "./utils/format";
 import { DEF_ISS, mkQuote } from "./utils/quoteFactory";
 import { generatePDF } from "./utils/pdf";
-import { clearLocalDrafts } from "./utils/drafts";
+import { clearLocalDrafts, draftKey, readDraft, writeDraft } from "./utils/drafts";
 import useResponsiveLayout from "./hooks/useResponsiveLayout";
 import { Btn, Sec } from "./components/common/Atoms";
 import ListView from "./components/views/ListView";
@@ -28,11 +29,15 @@ import ClientsView from "./components/views/ClientsView";
 import LoginView from "./components/views/LoginView";
 import AdminView from "./components/views/AdminView";
 import ResetPasswordView from "./components/views/ResetPasswordView";
+import OnboardingView from "./components/views/OnboardingView";
 
 const withQuoteSummary = (quote) => ({
   ...quote,
   summary: calcTotals(quote.items || []),
 });
+
+// Negocio elegido la última vez (si el usuario pertenece a varios).
+const orgPrefKey = (userId) => draftKey("current-org", userId);
 
 const UNSAVED_MESSAGE = "Tienes cambios sin guardar en la cotización. ¿Salir de todas formas?";
 
@@ -47,6 +52,8 @@ export default function App() {
   const [quotes, setQuotes] = useState([]);
   const [clients, setClients] = useState([]);
   const [issuer, setIssuer] = useState(DEF_ISS);
+  const [orgs, setOrgs] = useState([]);
+  const [orgId, setOrgId] = useState(null);
   const [view, setView] = useState("list");
   const [cur, setCur] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -69,6 +76,8 @@ export default function App() {
     setQuotes([]);
     setClients([]);
     setIssuer(DEF_ISS);
+    setOrgs([]);
+    setOrgId(null);
     setCur(null);
     setDraftDirty(false);
     setView("list");
@@ -147,11 +156,30 @@ export default function App() {
           setClients([]);
           setIssuer(DEF_ISS);
           setProfiles([]);
+          setOrgs([]);
+          setOrgId(null);
           setView((prev) => prev === "admin" ? "list" : prev);
           return;
         }
 
-        const tasks = [fetchQuotes(), fetchClients(), fetchIssuer()];
+        // Negocios del usuario. Sin ninguno → pantalla para crear "Mi negocio".
+        const myOrgs = await fetchMyOrganizations();
+        if (cancelled) return;
+        setOrgs(myOrgs);
+
+        if (myOrgs.length === 0) {
+          setOrgId(null);
+          setQuotes([]);
+          setClients([]);
+          setIssuer(DEF_ISS);
+          return;
+        }
+
+        const preferred = readDraft(orgPrefKey(nextProfile.id));
+        const activeOrg = myOrgs.find((o) => o.id === preferred) ?? myOrgs[0];
+        setOrgId(activeOrg.id);
+
+        const tasks = [fetchQuotes(activeOrg.id), fetchClients(activeOrg.id), fetchIssuer(activeOrg.id)];
         if (nextProfile.role === "admin") tasks.push(fetchProfiles());
         const [qs, cs, iss, allProfiles] = await Promise.all(tasks);
 
@@ -251,6 +279,27 @@ export default function App() {
     notify("Enlace de acceso enviado ✓", "ok");
   };
 
+  const org = orgs.find((o) => o.id === orgId) ?? null;
+  // El prefijo de numeración es del negocio y se aplica al mostrar (lista, editor, vista previa y PDF).
+  const quotePrefix = org?.quotePrefix ?? "";
+  const issuerWithPrefix = { ...issuer, quotePrefix };
+
+  const switchOrg = (nextOrgId) => {
+    if (!profile || nextOrgId === orgId) return;
+    if (!confirmDiscard()) return;
+    writeDraft(orgPrefKey(profile.id), nextOrgId);
+    setDraftDirty(false);
+    setView("list");
+    refreshApp();
+  };
+
+  const handleCreateOrg = async ({ name, taxMode }) => {
+    const newId = await createOrganization({ name, taxMode });
+    if (profile) writeDraft(orgPrefKey(profile.id), newId);
+    notify("Negocio creado ✓");
+    refreshApp();
+  };
+
   const handleSetNewPassword = async (password) => {
     await updatePassword(password);
     setRecoveryMode(false);
@@ -267,7 +316,7 @@ export default function App() {
   const newQ = () => {
     if (!profile) return;
     if (!confirmDiscard()) return;
-    setCur(mkQuote(issuer, profile.id));
+    setCur(mkQuote(issuer, profile.id, org));
     setDraftDirty(false);
     setView("editor");
   };
@@ -293,7 +342,7 @@ export default function App() {
   };
 
   const exportPdf = async (q, iss) => {
-    const ok = await generatePDF(q, iss);
+    const ok = await generatePDF(q, { ...iss, quotePrefix });
     if (!ok) notify("El navegador bloqueó la ventana del PDF. Permite ventanas emergentes para este sitio.", "info");
   };
 
@@ -301,9 +350,12 @@ export default function App() {
     if (!profile) return;
     try {
       setSaving(true);
-      const nextQuote = { ...q, userId: q.userId ?? profile.id };
+      const nextQuote = { ...q, userId: q.userId ?? profile.id, orgId: q.orgId ?? orgId };
       const isNew = !quotes.some((x) => x.id === nextQuote.id);
-      const saved = await dbSave(nextQuote, isNew);
+      const saved = await dbSave(nextQuote);
+      if (isNew && saved.number != null) {
+        setOrgs((prev) => prev.map((o) => (o.id === saved.orgId ? { ...o, nextQuoteNumber: Math.max(o.nextQuoteNumber, saved.number + 1) } : o)));
+      }
       setQuotes(prev => {
         const idx = prev.findIndex(x => x.id === saved.id);
         const nextSavedQuote = withQuoteSummary({ ...saved, items: nextQuote.items });
@@ -312,13 +364,13 @@ export default function App() {
       });
       setDraftDirty(false);
       try {
-        const cs = await fetchClients();
+        const cs = await fetchClients(saved.orgId ?? orgId);
         setClients(cs);
       } catch (err) {
         console.warn("No se pudo refrescar el historial de clientes", err);
       }
 
-      const iss = { ...issuer, ...q.issuer };
+      const iss = { ...issuerWithPrefix, ...q.issuer, quotePrefix };
       notify("Cotización guardada ✓");
       setView("list");
 
@@ -356,15 +408,19 @@ export default function App() {
     finally { setSaving(false); }
   };
 
-  const saveIssuerData = async (data) => {
+  const saveIssuerData = async ({ issuer: data, org: orgPatch }) => {
     try {
       setSaving(true);
-      await dbSaveIssuer(data);
+      if (orgPatch) {
+        const updatedOrg = await updateOrganization(orgId, orgPatch);
+        setOrgs((prev) => prev.map((o) => (o.id === orgId ? { ...o, ...updatedOrg, role: o.role } : o)));
+      }
+      await dbSaveIssuer(orgId, data);
       setIssuer(data);
       notify("Ajustes guardados ✓");
       setDraftDirty(false);
       setView("list");
-    } catch { notify("Error al guardar ajustes", "err"); }
+    } catch (err) { notify("Error al guardar ajustes: " + (err.message || ""), "err"); }
     finally { setSaving(false); }
   };
 
@@ -376,7 +432,7 @@ export default function App() {
   const saveClientData = async (client) => {
     if (!profile) throw new Error("No hay una sesión activa.");
     try {
-      const id = await dbSaveClient({ ...client, userId: client.userId ?? profile.id });
+      const id = await dbSaveClient(orgId, client);
       const updated = { ...client, id, userId: client.userId ?? profile.id };
       setClients(prev => {
         if (client.id) return prev.map(c => c.id === client.id ? updated : c);
@@ -530,6 +586,20 @@ export default function App() {
     );
   }
 
+  if (orgs.length === 0) {
+    if (loading) return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: F, background: "#f5f5f5" }}>
+        <div style={{ width: 40, height: 40, border: "3px solid #ddd", borderTopColor: "#000", borderRadius: "50%", animation: "spin .8s linear infinite" }} role="status" aria-label="Cargando" />
+      </div>
+    );
+    return (
+      <>
+        <OnboardingView profile={profile} onCreate={handleCreateOrg} onLogout={handleLogout} />
+        {toastEl}
+      </>
+    );
+  }
+
   const headerBtnStyle = isCompact ? { flex: "1 1 0", padding: "8px 10px" } : undefined;
 
   return (
@@ -578,7 +648,20 @@ export default function App() {
           }}
         >
           <div style={{ minWidth: 0, flex: isCompact ? "1 1 100%" : "0 1 auto" }}>
-            <div style={{ fontSize: 11, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px" }}>{profile.role === "admin" ? "Administrador" : "Usuario"}</div>
+            {orgs.length > 1 ? (
+              <select
+                aria-label="Negocio activo"
+                value={orgId ?? ""}
+                onChange={(e) => switchOrg(e.target.value)}
+                style={{ fontSize: 11, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".6px", border: "none", background: "transparent", padding: 0, maxWidth: "100%", minHeight: 0 }}
+              >
+                {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            ) : (
+              <div style={{ fontSize: 11, color: C.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {org?.name}{profile.role === "admin" ? " · Admin" : ""}
+              </div>
+            )}
             <div style={{ fontSize: 14, color: C.black, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {profile.fullName || profile.email}
               {isCompact && profile.fullName && <span style={{ fontSize: 12, color: C.gray, fontWeight: 400 }}> · {profile.email}</span>}
@@ -617,11 +700,11 @@ export default function App() {
             responsive={responsive}
           />
         )}
-        {view === "list" && <ListView quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} responsive={responsive} />}
-        {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => goTo("list")} onPreview={q => { setCur(q); setView("preview") }} onDraftChange={(next) => { setCur(next); setDraftDirty(true); }} totals={totals} clients={clients} issuer={issuer} responsive={responsive} />}
-        {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => goTo("list")} totals={totals} issuer={issuer} onExport={exportPdf} responsive={responsive} />}
-        {view === "settings" && <SettingsView issuer={issuer} onSave={saveIssuerData} onBack={() => setView("list")} responsive={responsive} />}
-        {view === "clients" && <ClientsView key={profile.id} userId={profile.id} clients={clients} onSave={saveClientData} onDelete={delClient} onBack={() => setView("list")} responsive={responsive} />}
+        {view === "list" && <ListView quotePrefix={quotePrefix} quotes={quotes} onNew={newQ} onEdit={editQ} onPreview={prevQ} onDelete={delQ} onDup={dupQ} onSettings={() => setView("settings")} onClients={() => setView("clients")} totals={totals} responsive={responsive} />}
+        {view === "editor" && <EditorView quote={cur} onSave={saveQ} onCancel={() => goTo("list")} onPreview={q => { setCur(q); setView("preview") }} onDraftChange={(next) => { setCur(next); setDraftDirty(true); }} totals={totals} clients={clients} issuer={issuerWithPrefix} responsive={responsive} />}
+        {view === "preview" && <PreviewView quote={cur} onBack={() => setView("editor")} onList={() => goTo("list")} totals={totals} issuer={issuerWithPrefix} onExport={exportPdf} responsive={responsive} />}
+        {view === "settings" && <SettingsView key={orgId} org={org} issuer={issuer} onSave={saveIssuerData} onBack={() => setView("list")} responsive={responsive} />}
+        {view === "clients" && <ClientsView key={`${profile.id}-${orgId}`} userId={`${profile.id}-${orgId}`} clients={clients} onSave={saveClientData} onDelete={delClient} onBack={() => setView("list")} responsive={responsive} />}
       </main>
 
       {toastEl}

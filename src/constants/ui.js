@@ -49,3 +49,22 @@ export const TDS = {
     verticalAlign: "top",
     fontFamily: F,
 };
+
+/* Tipo de impuesto del negocio (organizations.tax_mode). */
+export const TAX_MODE_OPTIONS = [
+    {
+        value: "iva",
+        label: "Afecto a IVA (19%)",
+        help: "Empresas y personas con inicio de actividades que emiten factura. Se suma 19% de IVA al neto.",
+    },
+    {
+        value: "exenta",
+        label: "Exento de IVA",
+        help: "Servicios o actividades exentas. El total es igual al neto.",
+    },
+    {
+        value: "honorarios",
+        label: "Boleta de honorarios",
+        help: "Independientes que emiten boleta de honorarios. Se informa la retención del SII.",
+    },
+];
