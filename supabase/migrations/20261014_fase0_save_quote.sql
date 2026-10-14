@@ -101,3 +101,11 @@ $$;
 
 revoke all on function public.save_quote(jsonb, jsonb) from public, anon;
 grant execute on function public.save_quote(jsonb, jsonb) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- quote_counter tenía RLS desactivado: con la anon key cualquiera podía leer o
+-- reiniciar el contador vía REST (y provocar números duplicados al guardar).
+-- Solo next_quote_number() (SECURITY DEFINER) necesita tocarlo.
+-- -----------------------------------------------------------------------------
+alter table public.quote_counter enable row level security;
+revoke all on table public.quote_counter from anon, authenticated;
